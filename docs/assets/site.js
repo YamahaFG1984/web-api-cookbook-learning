@@ -26,7 +26,9 @@
     { n: 19, t: '结语',                  d: '特性检测、polyfill 与 Web 平台的未来' },
     { n: 20, t: '事件系统深入',          d: '冒泡与捕获、事件委托、Pointer 与键盘事件', part: '第七部分 · 补充篇' },
     { n: 21, t: 'Web Worker 与主线程',   d: '事件循环、长任务、postMessage 与让出主线程' },
-    { n: 22, t: 'Service Worker 与 PWA', d: '离线缓存、缓存策略、更新流程与安装' }
+    { n: 22, t: 'Service Worker 与 PWA', d: '离线缓存、缓存策略、更新流程与安装' },
+    { n: 23, t: 'Web Crypto 与 Passkeys', d: '随机数、哈希、加密、签名与无密码登录' },
+    { n: 24, t: '前端安全',              d: 'XSS 防护、Sanitizer、CSP 与 Trusted Types' }
   ];
 
   var cur = parseInt(document.body.dataset.chapter || '0', 10);

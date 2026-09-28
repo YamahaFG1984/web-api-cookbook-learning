@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 23 章 · Web Crypto 与 Passkeys — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="23">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 23 章 · 补充篇</span>
+<h1>Web Crypto 与 Passkeys</h1>
+<p class="lede">
+  浏览器内置了一个完整的密码学工具箱：安全的随机数、哈希、对称加密、数字签名、从密码派生密钥……而且全部由浏览器用经过审计的原生代码实现。
+  在它之上，还诞生了正在取代密码的登录方式 —— <strong>Passkeys</strong>（通行密钥）。
+  这一章先把工具箱里的每样工具讲清楚，再看 Passkeys 是如何用这些工具让「钓鱼网站偷密码」彻底失效的。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>分清随机数、哈希、HMAC、对称加密、非对称签名各自解决什么问题</li>
+    <li>用 <code>crypto.getRandomValues</code> / <code>randomUUID</code> 生成安全随机值</li>
+    <li>用 <code>crypto.subtle</code> 计算文件哈希、用密码加密和解密数据、生成和保存密钥</li>
+    <li>理解 Passkeys 的原理：公钥密码学 + 与网站域名绑定</li>
+    <li>用 WebAuthn API（<code>navigator.credentials</code>）注册和使用 Passkey，并亲手在浏览器里验证一次签名</li>
+  </ul>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 先说最重要的一条</div>
+  <p>
+    <strong>不要自己发明加密方案。</strong>本章的目的是让你看懂和正确使用这些积木，而不是设计新的密码协议。
+    真实项目中，涉及账户、支付、端到端加密的部分，应该使用经过审计的库和成熟的协议，并让懂安全的人审查。
+    另外，前端加密<strong>不能替代 HTTPS</strong>：如果页面本身被篡改，页面里的加密代码也就不可信了。
+  </p>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">密码学工具箱</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="密码学工具箱中的六种工具">
+  <rect class="bx-b" x="20" y="16" width="230" height="84" rx="10"/>
+  <text class="ttl on-b" x="135" y="40" text-anchor="middle">🎲 安全随机数</text>
+  <text class="sm" x="135" y="62" text-anchor="middle">不可预测的随机值</text>
+  <text class="mono" x="135" y="84" text-anchor="middle" style="font-size:11px">getRandomValues · randomUUID</text>
+
+  <rect class="bx-g" x="265" y="16" width="230" height="84" rx="10"/>
+  <text class="ttl on-g" x="380" y="40" text-anchor="middle">🔎 哈希（摘要）</text>
+  <text class="sm" x="380" y="62" text-anchor="middle">任意数据 → 固定长度的「指纹」</text>
+  <text class="mono" x="380" y="84" text-anchor="middle" style="font-size:11px">digest('SHA-256')</text>
+
+  <rect class="bx-p" x="510" y="16" width="230" height="84" rx="10"/>
+  <text class="ttl on-p" x="625" y="40" text-anchor="middle">🏷 HMAC</text>
+  <text class="sm" x="625" y="62" text-anchor="middle">带密钥的指纹：证明「没被改过」</text>
+  <text class="mono" x="625" y="84" text-anchor="middle" style="font-size:11px">sign / verify('HMAC')</text>
+
+  <rect class="bx-a" x="20" y="116" width="230" height="84" rx="10"/>
+  <text class="ttl on-a" x="135" y="140" text-anchor="middle">🔒 对称加密</text>
+  <text class="sm" x="135" y="162" text-anchor="middle">同一把钥匙加密和解密</text>
+  <text class="mono" x="135" y="184" text-anchor="middle" style="font-size:11px">encrypt / decrypt('AES-GCM')</text>
+
+  <rect class="bx-r" x="265" y="116" width="230" height="84" rx="10"/>
+  <text class="ttl on-r" x="380" y="140" text-anchor="middle">✍️ 非对称签名</text>
+  <text class="sm" x="380" y="162" text-anchor="middle">私钥签名，公钥验证</text>
+  <text class="mono" x="380" y="184" text-anchor="middle" style="font-size:11px">ECDSA · Ed25519 · RSA</text>
+
+  <rect class="bx" x="510" y="116" width="230" height="84" rx="10"/>
+  <text class="ttl" x="625" y="140" text-anchor="middle">🗝 密钥派生</text>
+  <text class="sm" x="625" y="162" text-anchor="middle">把人记得住的密码变成密钥</text>
+  <text class="mono" x="625" y="184" text-anchor="middle" style="font-size:11px">deriveKey('PBKDF2')</text>
+
+  <rect class="bx-d" x="20" y="216" width="720" height="70" rx="10"/>
+  <text class="ttl" x="380" y="240" text-anchor="middle">它们在哪里？</text>
+  <text class="sm" x="380" y="262" text-anchor="middle">crypto.getRandomValues / randomUUID：直接挂在全局 crypto 上，同步可用</text>
+  <text class="sm" x="380" y="278" text-anchor="middle">其余全部在 crypto.subtle（SubtleCrypto）上，都返回 Promise，只能在安全上下文（HTTPS / localhost）中使用</text>
+</svg>
+<figcaption>图 23-1　Web Crypto API 提供的六类工具</figcaption>
+</figure>
+
+<p>
+  名字里的 <strong>subtle</strong>（微妙的）是在提醒：这些是底层原语，用错参数（比如重复使用 IV）会让安全性瞬间归零，而代码照样能「正常运行」。
+  整个 Web Crypto API 是 <span class="bl wide">Baseline 广泛可用</span>，并且在第 21 章的 Worker 中同样可用。
+</p>
+
+<h2 id="r23-1"><span class="rn">23.1</span>生成安全的随机值</h2>
+
+<p class="prob">你需要生成一个不可预测的值：验证码、重置密码的令牌、加密用的盐和 IV，或者一个唯一 ID。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// ✗ Math.random() 不是为安全设计的：它的输出可以被预测
+const weakToken = Math.random().toString(36).slice(2);
+
+// ✓ 密码学安全的随机字节
+const bytes = crypto.getRandomValues(new Uint8Array(16));   // 16 个随机字节（128 位）
+
+// ✓ 随机 UUID（v4），非常适合做唯一 ID
+const id = crypto.randomUUID();   // 例如 '3b241101-e2bb-4255-8caf-4136c566a962'
+
+// 转成十六进制字符串
+const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+// 较新的浏览器可以直接：bytes.toHex()，以及 bytes.toBase64()（Baseline 2025）
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th></th><th><code>Math.random()</code></th><th><code>crypto.getRandomValues()</code></th></tr>
+  <tr><td>来源</td><td>伪随机数算法，速度优先</td><td>操作系统的密码学安全随机源</td></tr>
+  <tr><td>可预测性</td><td>观察到足够多的输出后，可以推算出后续的值</td><td>不可预测</td></tr>
+  <tr><td>适合</td><td>游戏、动画、抽样、随机颜色</td><td>令牌、密码、密钥、盐、IV、抽奖等一切与安全或公平有关的场合</td></tr>
+</table>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：生成随机值</div>
+  <div class="b">
+    <div class="row"><button id="rnd-btn">生成</button></div>
+    <div class="out" id="rnd-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r23-2"><span class="rn">23.2</span>计算哈希：文件指纹</h2>
+
+<p class="prob">你想校验用户下载或上传的文件是否完整、是否被篡改，或者判断两个文件内容是否相同（秒传、去重）。</p>
+
+<p>
+  <strong>哈希函数</strong>把任意长度的数据变成固定长度的「指纹」。好的哈希函数有三个特性：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="哈希函数的三个特性">
+  <rect class="bx-g" x="20" y="20" width="230" height="190" rx="12"/>
+  <text class="ttl on-g" x="135" y="44" text-anchor="middle">① 确定性</text>
+  <text class="mono" x="36" y="80" style="font-size:11px">"hello" →</text>
+  <text class="mono" x="36" y="98" style="font-size:11px">2cf24dba5fb0a30e…</text>
+  <text class="mono" x="36" y="128" style="font-size:11px">"hello" →</text>
+  <text class="mono" x="36" y="146" style="font-size:11px">2cf24dba5fb0a30e…</text>
+  <text class="sm" x="135" y="186" text-anchor="middle">同样的输入，永远同样的输出</text>
+
+  <rect class="bx-a" x="265" y="20" width="230" height="190" rx="12"/>
+  <text class="ttl on-a" x="380" y="44" text-anchor="middle">② 雪崩效应</text>
+  <text class="mono" x="281" y="80" style="font-size:11px">"hello" →</text>
+  <text class="mono" x="281" y="98" style="font-size:11px">2cf24dba5fb0a30e…</text>
+  <text class="mono" x="281" y="128" style="font-size:11px">"hellp" →</text>
+  <text class="mono" x="281" y="146" style="font-size:11px">完全不同的另一串…</text>
+  <text class="sm" x="380" y="186" text-anchor="middle">改动 1 个字符，指纹面目全非</text>
+
+  <rect class="bx-r" x="510" y="20" width="230" height="190" rx="12"/>
+  <text class="ttl on-r" x="625" y="44" text-anchor="middle">③ 单向</text>
+  <text class="mono" x="625" y="90" text-anchor="middle" style="font-size:11px">2cf24dba5fb0a30e…</text>
+  <text class="sm on-r" x="625" y="116" text-anchor="middle">✗ 无法从指纹算回原文</text>
+  <text class="sm" x="625" y="140" text-anchor="middle">也很难找到两份不同的数据</text>
+  <text class="sm" x="625" y="156" text-anchor="middle">有相同的指纹（抗碰撞）</text>
+  <text class="sm" x="625" y="186" text-anchor="middle">所以哈希 ≠ 加密</text>
+</svg>
+<figcaption>图 23-2　SHA-256 的三个特性</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+async function sha256Hex(data) {
+  // data 可以是 ArrayBuffer、TypedArray（如 TextEncoder 的输出）
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 字符串要先编码成字节
+await sha256Hex(new TextEncoder().encode('hello'));
+// '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+
+// 文件（第 10 章）：先读成 ArrayBuffer
+fileInput.addEventListener('change', async () => {
+  const [file] = fileInput.files;
+  const hash = await sha256Hex(await file.arrayBuffer());
+  console.log(`${file.name} 的 SHA-256：${hash}`);
+});
+</script>
+</div>
+
+<p>
+  <code>digest</code> 支持 <code>SHA-1</code>、<code>SHA-256</code>、<code>SHA-384</code>、<code>SHA-512</code>。
+  SHA-1 已被证明可以构造碰撞，不应再用于安全用途。MD5 则根本不在支持列表里。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 哈希不适合直接存密码</div>
+  <p>
+    SHA-256 被设计得<strong>很快</strong>，这对校验文件是优点，对存储密码却是缺点：攻击者每秒能尝试数十亿次猜测。
+    存储密码应该在<strong>服务器端</strong>使用专门「故意变慢」的算法（Argon2、bcrypt、scrypt），并且每个用户使用不同的盐。
+    在前端先对密码做一次 SHA-256 再发送，并不能提高安全性 —— 那个哈希值本身就成了新的「密码」。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：文本与文件的 SHA-256（完全在本地计算）</div>
+  <div class="b">
+    <div class="row"><input id="hash-text" value="hello" style="flex:1"></div>
+    <div class="row"><input type="file" id="hash-file"></div>
+    <div class="out" id="hash-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r23-3"><span class="rn">23.3</span>用密码加密数据</h2>
+
+<p class="prob">你在做一个本地笔记应用，想让用户设置一个密码，笔记加密后再存进 IndexedDB（第 5 章），没有密码谁也看不懂。</p>
+
+<p>
+  加密算法需要的是<strong>密钥</strong>（一串随机的字节），而不是人记得住的密码。所以流程分两步：先用 <strong>PBKDF2</strong> 把密码「拉伸」成密钥，再用 <strong>AES-GCM</strong> 加密：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="基于密码的加密流程：PBKDF2 派生密钥，AES-GCM 加密">
+  <rect class="bx-b" x="20" y="30" width="130" height="50" rx="8"/><text class="lbl on-b" x="85" y="52" text-anchor="middle">用户密码</text><text class="mono" x="85" y="70" text-anchor="middle" style="font-size:11px">'correct horse'</text>
+  <rect class="bx" x="20" y="96" width="130" height="50" rx="8"/><text class="lbl" x="85" y="118" text-anchor="middle">盐 salt</text><text class="sm" x="85" y="136" text-anchor="middle">16 个随机字节</text>
+  <path class="ln" d="M152 55 L206 82" marker-end="url(#ar)"/>
+  <path class="ln" d="M152 121 L206 96" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="210" y="56" width="150" height="66" rx="10"/>
+  <text class="ttl on-p" x="285" y="80" text-anchor="middle">PBKDF2</text>
+  <text class="sm" x="285" y="98" text-anchor="middle">SHA-256 × 60 万次</text>
+  <text class="sm" x="285" y="114" text-anchor="middle">故意算得很慢</text>
+  <path class="ln-p" d="M362 89 H406" marker-end="url(#ar-p)"/>
+  <rect class="bx-a" x="410" y="64" width="130" height="50" rx="8"/><text class="lbl on-a" x="475" y="86" text-anchor="middle">AES 密钥</text><text class="sm" x="475" y="104" text-anchor="middle">256 位</text>
+
+  <rect class="bx" x="410" y="170" width="130" height="50" rx="8"/><text class="lbl" x="475" y="192" text-anchor="middle">IV（随机数）</text><text class="sm" x="475" y="210" text-anchor="middle">12 字节，每次都新的</text>
+  <rect class="bx-b" x="410" y="232" width="130" height="44" rx="8"/><text class="lbl on-b" x="475" y="259" text-anchor="middle">明文</text>
+  <path class="ln-a" d="M542 89 L596 150" marker-end="url(#ar-a)"/>
+  <path class="ln" d="M542 195 L596 170" marker-end="url(#ar)"/>
+  <path class="ln" d="M542 254 L596 180" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="600" y="136" width="140" height="56" rx="10"/>
+  <text class="ttl on-g" x="670" y="160" text-anchor="middle">AES-GCM</text>
+  <text class="sm" x="670" y="178" text-anchor="middle">密文 + 校验标签</text>
+
+  <rect class="bx-d" x="20" y="180" width="370" height="96" rx="10"/>
+  <text class="ttl" x="36" y="204">需要保存的东西</text>
+  <text class="mono" x="36" y="228" style="font-size:11.5px">{ salt, iv, ciphertext }</text>
+  <text class="sm" x="36" y="248">salt 和 iv 不是秘密，可以和密文存在一起；</text>
+  <text class="sm" x="36" y="266">真正的秘密只有密码，它永远不被保存</text>
+</svg>
+<figcaption>图 23-3　密码 → 密钥 → 加密：解密时用同样的 salt 重新派生出同一把密钥</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+// 从密码和盐派生出 AES-GCM 密钥
+async function deriveKey(password, salt) {
+  const baseKey = await crypto.subtle.importKey(
+    'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 600_000, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,                       // 不可导出：这把密钥无法被读出原始字节
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptText(password, plaintext) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));    // 每次加密都要新的 IV！
+  const key = await deriveKey(password, salt);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+  return { salt, iv, ciphertext };   // 三样都要保存（IndexedDB 可以直接存 Uint8Array / ArrayBuffer）
+}
+
+async function decryptText(password, { salt, iv, ciphertext }) {
+  const key = await deriveKey(password, salt);
+  // 密码错误或密文被篡改时，这里会抛出 OperationError
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return dec.decode(plaintext);
+}
+</script>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 为什么是 AES-GCM？为什么 IV 不能重复？</div>
+  <ul>
+    <li><strong>GCM 是「带认证的加密」</strong>：密文末尾附带 16 字节的校验标签。密文哪怕被改动一个比特，解密都会失败，而不是悄悄得到一段乱码。这也是为什么用错密码时解密会直接报错。</li>
+    <li><strong>同一把密钥下，IV 绝不能重复使用</strong>。重复的 IV 会让 AES-GCM 的安全性彻底崩溃（攻击者可以推算出明文之间的关系，甚至伪造密文）。每次加密都用 <code>getRandomValues</code> 生成新的 12 字节 IV。</li>
+    <li><strong>迭代次数</strong>：60 万次 PBKDF2-SHA256 是目前常见的推荐值，让暴力猜测密码的成本足够高，同时在普通设备上只需几百毫秒。</li>
+  </ul>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：用密码加密和解密</div>
+  <div class="b">
+    <div class="row"><input id="enc-pw" value="correct horse" placeholder="密码" style="width:180px"><input id="enc-text" value="这是一段秘密笔记 🔐" style="flex:1"></div>
+    <div class="row"><button id="enc-btn">加密</button><button id="dec-btn" disabled>用上面的密码解密</button></div>
+    <div class="out" id="enc-out" style="min-height:0"></div>
+    <p class="hint">加密后改一下密码再点解密，会看到 OperationError。</p>
+  </div>
+</div>
+
+<h2 id="r23-4"><span class="rn">23.4</span>生成、导出与保存密钥</h2>
+
+<p class="prob">你需要一把随机生成的密钥（而不是从密码派生的），并且希望它在浏览器里安全地保存下来，刷新后还能用。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 生成一把随机的 AES 密钥
+const key = await crypto.subtle.generateKey(
+  { name: 'AES-GCM', length: 256 },
+  false,                    // extractable: false —— 任何 JS 都无法读出它的原始字节
+  ['encrypt', 'decrypt']
+);
+
+// CryptoKey 可以被结构化克隆，所以能直接存进 IndexedDB（第 5 章）
+await db.put('keys', key, 'notes-key');
+const sameKey = await db.get('keys', 'notes-key');   // 刷新后取回，仍然可用，仍然不可导出
+
+// 需要导出时（比如备份），创建时设为 extractable: true，再导出为 JWK 或原始字节
+const exportable = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+const jwk = await crypto.subtle.exportKey('jwk', exportable);   // { kty: 'oct', k: '…', alg: 'A256GCM', … }
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 不可导出的密钥有多安全？</div>
+  <p>
+    <code>extractable: false</code> 意味着即使页面遭到 XSS 攻击（第 24 章），攻击者也<strong>拿不走</strong>密钥本身 —— 但他仍然可以在页面还开着的时候<strong>调用</strong>这把密钥去加密、解密。
+    它能防止密钥被偷走带到别处长期使用，但不能代替第 24 章的 XSS 防护。
+  </p>
+</div>
+
+<h3>数字签名</h3>
+
+<p>
+  非对称算法有一对密钥：<strong>私钥</strong>用来签名，自己保管；<strong>公钥</strong>用来验证，可以公开给任何人。
+  这正是下面 Passkeys 的基础：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const { privateKey, publicKey } = await crypto.subtle.generateKey(
+  { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']
+);
+
+const data = new TextEncoder().encode('我同意这份合同');
+const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, data);
+
+await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, publicKey, signature, data);   // true
+// 数据改动任何一个字节，verify 都会返回 false
+
+// Ed25519 更快、更简单，现在也已在各主流浏览器可用（Baseline 2025）
+await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="对称密钥与非对称密钥对的区别">
+  <rect class="bx-a" x="20" y="20" width="350" height="130" rx="12"/>
+  <text class="ttl on-a" x="195" y="44" text-anchor="middle">对称：一把钥匙</text>
+  <text class="sm" x="195" y="70" text-anchor="middle">🔑 加密用它，解密也用它</text>
+  <text class="sm" x="195" y="92" text-anchor="middle">双方必须事先安全地共享这把钥匙</text>
+  <text class="sm" x="195" y="122" text-anchor="middle">AES-GCM · HMAC</text>
+
+  <rect class="bx-r" x="390" y="20" width="350" height="130" rx="12"/>
+  <text class="ttl on-r" x="565" y="44" text-anchor="middle">非对称：一对钥匙</text>
+  <text class="sm" x="565" y="70" text-anchor="middle">🔐 私钥：签名，永不离开设备</text>
+  <text class="sm" x="565" y="92" text-anchor="middle">🔓 公钥：验证，可以交给任何人</text>
+  <text class="sm" x="565" y="122" text-anchor="middle">ECDSA · Ed25519 · RSA</text>
+</svg>
+<figcaption>图 23-4　对称与非对称</figcaption>
+</figure>
+
+<h2 id="passkeys">Passkeys：用公钥密码学登录</h2>
+
+<p>
+  密码有两个根本问题：用户会在多个网站使用同一个密码（一处泄露，处处遭殃）；以及<strong>钓鱼</strong> —— 用户把密码输进一个长得很像的假网站。
+  <strong>Passkey</strong> 用非对称密钥对替代密码：注册时，设备为这个网站生成一对密钥，私钥留在设备（或同步到你的密码管理器）中，公钥交给网站。
+  登录时，网站发来一个随机「挑战」，设备用私钥签名，网站用公钥验证。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="Passkey 注册与登录的时序">
+  <rect class="bx-b" x="20" y="14" width="160" height="36" rx="8"/><text class="lbl on-b" x="100" y="37" text-anchor="middle">认证器（手机 / 电脑）</text>
+  <rect class="bx" x="300" y="14" width="160" height="36" rx="8"/><text class="lbl" x="380" y="37" text-anchor="middle">浏览器 · 你的页面</text>
+  <rect class="bx-g" x="580" y="14" width="160" height="36" rx="8"/><text class="lbl on-g" x="660" y="37" text-anchor="middle">你的服务器</text>
+  <path class="ln-d" d="M100 52 V320 M380 52 V320 M660 52 V320"/>
+
+  <text class="ttl on-a" x="20" y="74">注册</text>
+  <path class="ln-g" d="M656 86 H384" marker-end="url(#ar-g)"/><text class="sm on-g" x="520" y="80" text-anchor="middle">随机 challenge + 用户信息</text>
+  <path class="ln" d="M376 106 H104" marker-end="url(#ar)"/><text class="mono" x="240" y="100" text-anchor="middle" style="font-size:10.5px">credentials.create()</text>
+  <text class="sm on-b" x="104" y="126">👆 指纹 / 面容 / PIN 验证用户</text>
+  <text class="sm on-b" x="104" y="142">为 example.com 生成新的密钥对</text>
+  <path class="ln-b" d="M104 158 H376" marker-end="url(#ar-b)"/><text class="sm on-b" x="240" y="174" text-anchor="middle">公钥 + 凭证 ID</text>
+  <path class="ln" d="M384 172 H656" marker-end="url(#ar)"/><text class="sm" x="520" y="166" text-anchor="middle">发给服务器</text>
+  <text class="sm on-g" x="656" y="190" text-anchor="end">保存：用户 ↔ 凭证 ID ↔ 公钥</text>
+
+  <text class="ttl on-a" x="20" y="214">登录</text>
+  <path class="ln-g" d="M656 226 H384" marker-end="url(#ar-g)"/><text class="sm on-g" x="520" y="220" text-anchor="middle">新的随机 challenge</text>
+  <path class="ln" d="M376 246 H104" marker-end="url(#ar)"/><text class="mono" x="240" y="240" text-anchor="middle" style="font-size:10.5px">credentials.get()</text>
+  <text class="sm on-b" x="104" y="266">👆 验证用户，用私钥对 challenge 签名</text>
+  <path class="ln-b" d="M104 282 H376" marker-end="url(#ar-b)"/><text class="sm on-b" x="240" y="298" text-anchor="middle">签名</text>
+  <path class="ln" d="M384 296 H656" marker-end="url(#ar)"/><text class="sm" x="520" y="290" text-anchor="middle">转发</text>
+  <text class="sm on-g" x="656" y="314" text-anchor="end">用保存的公钥验证签名 ✓ 登录成功</text>
+</svg>
+<figcaption>图 23-5　Passkey：服务器只保存公钥，私钥从不离开认证器</figcaption>
+</figure>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#127907;</span><h4>天生防钓鱼</h4><p>密钥对与网站的域名绑定，浏览器会把当前域名写进签名数据。假网站 examp1e.com 根本调不出 example.com 的 Passkey。</p></div>
+  <div class="card"><span class="ic">&#128451;</span><h4>服务器泄露也不怕</h4><p>服务器只存公钥。数据库被拖走，攻击者拿到的公钥也无法用来登录。</p></div>
+  <div class="card"><span class="ic">&#128070;</span><h4>体验更好</h4><p>不用记密码、不用收验证码，一次指纹或面容识别就完成登录。</p></div>
+  <div class="card"><span class="ic">&#9729;&#65039;</span><h4>可以同步</h4><p>iCloud 钥匙串、Google 密码管理器等会在你的设备间同步 Passkey；也可以用手机扫码在别人的电脑上登录。</p></div>
+</div>
+
+<p>浏览器端的 API 叫 <strong>WebAuthn</strong>（Web Authentication），通过 <code>navigator.credentials</code> 调用。<span class="bl wide">Baseline 广泛可用</span></p>
+
+<h2 id="r23-5"><span class="rn">23.5</span>注册一个 Passkey</h2>
+
+<p class="prob">用户已经登录（或正在注册），你想为他创建一个 Passkey，下次免密码登录。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 1. 从服务器获取注册参数（challenge 必须由服务器随机生成，并在验证时核对）
+const options = await fetch('/webauthn/register/options').then(r => r.json());
+
+// 2. 调用浏览器 API：弹出系统的 Passkey 对话框
+const credential = await navigator.credentials.create({
+  publicKey: {
+    challenge: base64urlToBytes(options.challenge),
+    rp: { id: 'example.com', name: '示例网站' },          // rp = relying party，依赖方（你的网站）
+    user: {
+      id: base64urlToBytes(options.userId),               // 用户的不透明 ID，不要用邮箱等个人信息
+      name: 'ava@example.com',                            // 显示给用户的账户名
+      displayName: 'Ava'
+    },
+    pubKeyCredParams: [
+      { type: 'public-key', alg: -7 },    // ES256（ECDSA P-256）
+      { type: 'public-key', alg: -8 },    // Ed25519
+      { type: 'public-key', alg: -257 }   // RS256
+    ],
+    authenticatorSelection: {
+      residentKey: 'required',            // 可发现凭证：登录时不必先输入用户名
+      userVerification: 'preferred'       // 尽量要求指纹 / 面容 / PIN
+    },
+    timeout: 60_000
+  }
+});
+
+// 3. 把结果发回服务器验证并保存公钥
+await fetch('/webauthn/register/verify', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(credential.toJSON())   // toJSON() 会把二进制字段转成 base64url
+});
+</script>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 少写一堆 base64 转换代码</div>
+  <p>
+    WebAuthn 的参数和结果里有大量二进制字段（<code>ArrayBuffer</code>），以前需要手写 base64url 编解码。现在浏览器提供了
+    <code>PublicKeyCredential.parseCreationOptionsFromJSON()</code>、<code>parseRequestOptionsFromJSON()</code> 和 <code>credential.toJSON()</code>，
+    服务器下发 JSON、页面直接转换即可。<span class="bl newly">Baseline 2025</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const json = await fetch('/webauthn/register/options').then(r => r.json());
+const credential = await navigator.credentials.create({
+  publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(json)
+});
+</script>
+  </div>
+</div>
+
+<h2 id="r23-6"><span class="rn">23.6</span>用 Passkey 登录（含自动填充）</h2>
+
+<p class="prob">让用户用 Passkey 登录，最好还能像密码一样出现在用户名输入框的自动填充列表里。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const options = await fetch('/webauthn/login/options').then(r => r.json());
+
+const assertion = await navigator.credentials.get({
+  publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(options)
+  // options 中通常只有 challenge、rpId、userVerification；
+  // 不指定 allowCredentials，就让用户从这个网站的所有 Passkey 中选择
+});
+
+const result = await fetch('/webauthn/login/verify', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(assertion.toJSON())
+});
+</script>
+</div>
+
+<h3>条件式 UI：Passkey 出现在自动填充里</h3>
+
+<p>
+  很多用户还不知道 Passkey 是什么，突然弹出的对话框会让人困惑。<strong>条件式 UI</strong>（conditional mediation）让 Passkey 像保存的密码一样，
+  出现在用户名输入框的自动填充下拉列表中，用户选择它就直接登录：
+</p>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<!-- autocomplete 里加上 webauthn -->
+<input name="username" autocomplete="username webauthn">
+</script>
+</div>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+if (await PublicKeyCredential.isConditionalMediationAvailable?.()) {
+  // 页面加载时就发起请求，但不会弹窗；用户在自动填充中选了 Passkey 时 Promise 才兑现
+  const assertion = await navigator.credentials.get({
+    mediation: 'conditional',
+    publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(options)
+  });
+  await verifyOnServer(assertion);
+}
+</script>
+</div>
+
+<h2 id="r23-7"><span class="rn">23.7</span>亲手验证一次签名</h2>
+
+<p class="prob">你想弄明白服务器到底验证了什么：签名是对什么数据签的？为什么它能防钓鱼？</p>
+
+<p>
+  登录返回的 <code>assertion.response</code> 里有三样关键数据。服务器的验证步骤如下 ——
+  我们可以用本章前半部分学的 Web Crypto <strong>在浏览器里完整复现一遍</strong>（仅用于学习，真实系统必须在服务器端验证）：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="WebAuthn 签名验证的数据构成">
+  <rect class="bx-b" x="20" y="20" width="230" height="110" rx="10"/>
+  <text class="ttl on-b" x="135" y="42" text-anchor="middle">clientDataJSON</text>
+  <text class="mono" x="32" y="66" style="font-size:10.5px">{ "type": "webauthn.get",</text>
+  <text class="mono" x="32" y="84" style="font-size:10.5px">  "challenge": "…",</text>
+  <text class="mono on-r" x="32" y="102" style="font-size:10.5px">  "origin": "https://…" }</text>
+  <text class="sm" x="135" y="122" text-anchor="middle">由浏览器生成，写入真实域名</text>
+
+  <rect class="bx-p" x="265" y="20" width="230" height="110" rx="10"/>
+  <text class="ttl on-p" x="380" y="42" text-anchor="middle">authenticatorData</text>
+  <text class="sm" x="380" y="66" text-anchor="middle">rpId 的 SHA-256（32 字节）</text>
+  <text class="sm" x="380" y="84" text-anchor="middle">标志位：用户在场 / 已验证</text>
+  <text class="sm" x="380" y="102" text-anchor="middle">签名计数器</text>
+  <text class="sm" x="380" y="122" text-anchor="middle">由认证器生成</text>
+
+  <rect class="bx-a" x="510" y="20" width="230" height="110" rx="10"/>
+  <text class="ttl on-a" x="625" y="42" text-anchor="middle">signature</text>
+  <text class="sm" x="625" y="72" text-anchor="middle">私钥对下面这串数据的签名：</text>
+  <text class="mono" x="625" y="96" text-anchor="middle" style="font-size:10.5px">authenticatorData ‖</text>
+  <text class="mono" x="625" y="114" text-anchor="middle" style="font-size:10.5px">SHA-256(clientDataJSON)</text>
+
+  <path class="ln" d="M135 132 V170 H330" marker-end="url(#ar)"/>
+  <path class="ln" d="M380 132 V166" marker-end="url(#ar)"/>
+  <path class="ln" d="M625 132 V170 H430" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="200" y="170" width="360" height="50" rx="10"/>
+  <text class="mono on-g" x="380" y="192" text-anchor="middle" style="font-size:11.5px">crypto.subtle.verify(算法, 公钥, 签名, 数据)</text>
+  <text class="sm" x="380" y="210" text-anchor="middle">再核对 type、challenge、origin、rpId 哈希</text>
+
+  <text class="sm on-r" x="380" y="248" text-anchor="middle">防钓鱼的关键：origin 由浏览器填写、被签进签名里。钓鱼网站拿到签名也没用 ——</text>
+  <text class="sm on-r" x="380" y="266" text-anchor="middle">上面写的是钓鱼网站的域名，服务器一核对就会拒绝；而且认证器根本不会为它调出 example.com 的密钥</text>
+</svg>
+<figcaption>图 23-6　签名覆盖了 authenticatorData 和 clientDataJSON（其中包含 origin 与 challenge）</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="在浏览器中验证（仅作学习）">
+<script type="text/plain">
+// 注册时保存下来的：公钥（SPKI 格式）和算法编号
+const publicKeyDer = registration.response.getPublicKey();        // ArrayBuffer
+const alg = registration.response.getPublicKeyAlgorithm();        // -7 = ES256
+
+// 登录时拿到的
+const { authenticatorData, clientDataJSON, signature } = assertion.response;
+
+// 1. 核对 clientData：类型、challenge、origin
+const clientData = JSON.parse(new TextDecoder().decode(clientDataJSON));
+console.assert(clientData.type === 'webauthn.get');
+console.assert(clientData.origin === location.origin);
+console.assert(clientData.challenge === toBase64url(challenge));
+
+// 2. 被签名的数据 = authenticatorData ‖ SHA-256(clientDataJSON)
+const clientHash = await crypto.subtle.digest('SHA-256', clientDataJSON);
+const signedData = concat(new Uint8Array(authenticatorData), new Uint8Array(clientHash));
+
+// 3. 用公钥验证。注意：ES256 的签名是 DER 编码的，Web Crypto 要求 r‖s 原始格式，需要转换
+const key = await crypto.subtle.importKey('spki', publicKeyDer,
+  { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' },
+  key, derToRaw(new Uint8Array(signature)), signedData);
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：创建一个 Passkey，然后用它登录，并在本地验证签名</div>
+  <div class="b">
+    <div class="box warn" style="margin:0 0 10px">
+      <div class="t">&#9888; 这会真的创建一个 Passkey</div>
+      <p>点击「注册」后，你的系统或密码管理器中会多出一个名为「Web API 教程演示」的 Passkey，只对当前网站有效。演示结束后可以在系统设置 / 密码管理器中删除它。本演示没有服务器，数据只保存在本页的 localStorage 中。</p>
+    </div>
+    <div class="row">
+      <button id="pk-reg">① 注册 Passkey</button>
+      <button id="pk-login">② 用 Passkey 登录并验证签名</button>
+      <button id="pk-forget">忘记本地记录</button>
+    </div>
+    <div class="out" id="pk-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 服务器端请使用成熟的库</div>
+  <p>
+    完整的服务器验证还包括：核对 rpId 哈希、检查用户验证标志、签名计数器、证明（attestation）格式等大量细节。
+    请使用 <a href="https://simplewebauthn.dev">SimpleWebAuthn</a>（Node.js）或各语言对应的成熟库，不要自己实现。
+    另外，让用户保留至少一种备用登录方式（如另一个 Passkey 或恢复码），以免丢失设备后无法登录。
+  </p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>安全随机数用 <code>crypto.getRandomValues</code> / <code>randomUUID</code>，永远不要用 <code>Math.random</code> 生成令牌和密钥。</li>
+  <li><code>crypto.subtle</code> 提供哈希、HMAC、加密、签名、密钥派生，全部返回 Promise，只在安全上下文中可用。</li>
+  <li>哈希是单向的指纹，适合校验完整性；密码存储要在服务器端用 Argon2 / bcrypt。</li>
+  <li>用密码加密：PBKDF2 派生密钥 + AES-GCM；salt 和 IV 随密文保存，IV 每次都要新生成。</li>
+  <li>不可导出的 <code>CryptoKey</code> 可以直接存入 IndexedDB。</li>
+  <li>Passkeys 用非对称密钥替代密码：服务器只存公钥，签名中包含 origin，天然防钓鱼；通过 <code>navigator.credentials.create / get</code> 使用，服务器端验证交给成熟的库。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个「文件完整性校验」小工具：选择文件后显示 SHA-256，并与用户粘贴的官方校验值对比。</li>
+    <li>给第 5 章的通讯录加上「加密锁」：输入密码后才能查看，数据以 <code>{ salt, iv, ciphertext }</code> 的形式存进 IndexedDB。</li>
+    <li>用 HMAC 实现一个「防篡改」的 localStorage：保存时附带签名，读取时校验，被手动修改过的数据会被识别出来（思考：密钥放在哪里？这种方案能防御什么、不能防御什么？）。</li>
+    <li>阅读 SimpleWebAuthn 的示例项目，搭一个带服务器的完整 Passkey 登录流程，并尝试用条件式 UI 登录。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var enc = new TextEncoder(), dec = new TextDecoder();
+  function hex(buf) { return Array.from(new Uint8Array(buf), function (b) { return b.toString(16).padStart(2, '0'); }).join(''); }
+  function b64url(buf) {
+    var s = ''; new Uint8Array(buf).forEach(function (b) { s += String.fromCharCode(b); });
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function fromB64url(str) {
+    str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '=';
+    return Uint8Array.from(atob(str), function (c) { return c.charCodeAt(0); });
+  }
+  var subtle = window.crypto && crypto.subtle;
+  function needSubtle(out) { if (!subtle) { out.textContent = 'crypto.subtle 不可用：需要 HTTPS 或 localhost（部署到 GitHub Pages 后即可）'; return false; } return true; }
+
+  // 23.1
+  document.getElementById('rnd-btn').onclick = function () {
+    var bytes = crypto.getRandomValues(new Uint8Array(16));
+    document.getElementById('rnd-out').textContent =
+      'getRandomValues(16 字节) = ' + hex(bytes) + '\n' +
+      'randomUUID()            = ' + (crypto.randomUUID ? crypto.randomUUID() : '（需要安全上下文）') + '\n' +
+      '6 位数字验证码          = ' + String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0') + '\n' +
+      'Math.random()（勿用于安全）= ' + Math.random();
+  };
+  document.getElementById('rnd-btn').click();
+
+  // 23.2
+  var ho = document.getElementById('hash-out'), ht = document.getElementById('hash-text'), hf = document.getElementById('hash-file');
+  var fileLine = '';
+  async function hashText() {
+    if (!needSubtle(ho)) return;
+    var h = hex(await subtle.digest('SHA-256', enc.encode(ht.value)));
+    ho.textContent = 'SHA-256("' + ht.value + '") =\n' + h + (fileLine ? '\n\n' + fileLine : '');
+  }
+  ht.addEventListener('input', hashText); hashText();
+  hf.addEventListener('change', async function () {
+    var f = hf.files[0]; if (!f || !subtle) return;
+    var t0 = performance.now(), h = hex(await subtle.digest('SHA-256', await f.arrayBuffer()));
+    fileLine = f.name + '（' + f.size + ' 字节，' + Math.round(performance.now() - t0) + 'ms）\n' + h;
+    hashText();
+  });
+
+  // 23.3
+  var eo = document.getElementById('enc-out'), bundle = null;
+  async function deriveKey(pw, salt) {
+    var base = await subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: 600000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  document.getElementById('enc-btn').onclick = async function () {
+    if (!needSubtle(eo)) return;
+    eo.textContent = '派生密钥中（PBKDF2 60 万次）……';
+    var t0 = performance.now();
+    var salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    var key = await deriveKey(document.getElementById('enc-pw').value, salt);
+    var t1 = performance.now();
+    var ct = await subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, enc.encode(document.getElementById('enc-text').value));
+    bundle = { salt: salt, iv: iv, ct: ct };
+    eo.textContent = '派生密钥耗时 ' + Math.round(t1 - t0) + 'ms\n' +
+      'salt       = ' + hex(salt) + '\niv         = ' + hex(iv) + '\nciphertext = ' + hex(ct) + '\n（' + ct.byteLength + ' 字节，其中最后 16 字节是 GCM 校验标签）';
+    document.getElementById('dec-btn').disabled = false;
+  };
+  document.getElementById('dec-btn').onclick = async function () {
+    if (!bundle) return;
+    try {
+      var key = await deriveKey(document.getElementById('enc-pw').value, bundle.salt);
+      var pt = await subtle.decrypt({ name: 'AES-GCM', iv: bundle.iv }, key, bundle.ct);
+      eo.textContent += '\n\n✓ 解密成功：' + dec.decode(pt);
+    } catch (e) { eo.textContent += '\n\n✗ 解密失败：' + e.name + '（密码错误或密文被篡改）'; }
+  };
+
+  // 23.7 Passkey 演示
+  var po = document.getElementById('pk-out');
+  function plog(s) { po.textContent += s + '\n'; }
+  function derToRaw(der) {
+    var i = 2; if (der[1] & 0x80) i = 2 + (der[1] & 0x7f);
+    function readInt() { i++; var len = der[i++]; var v = der.slice(i, i + len); i += len; return v; }
+    function fix(x) { while (x.length > 32 && x[0] === 0) x = x.slice(1); var o = new Uint8Array(32); o.set(x, 32 - x.length); return o; }
+    var r = fix(readInt()), s = fix(readInt()), out = new Uint8Array(64); out.set(r); out.set(s, 32); return out;
+  }
+  var STORE = 'webapi-demo-passkey';
+  function saved() { try { return JSON.parse(localStorage.getItem(STORE)); } catch (e) { return null; } }
+  var supported = window.PublicKeyCredential && navigator.credentials && window.isSecureContext;
+  if (!supported) po.textContent = '当前环境不支持 WebAuthn（需要 HTTPS 或 localhost 以及支持 Passkey 的浏览器）';
+  else po.textContent = saved() ? '本地已有注册记录，可以直接点「② 登录」。' : '点击「① 注册 Passkey」开始。';
+
+  document.getElementById('pk-reg').onclick = async function () {
+    if (!supported) return;
+    po.textContent = '';
+    try {
+      var cred = await navigator.credentials.create({ publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: 'Web API 教程演示' },                    // 省略 rp.id = 使用当前域名
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'demo@webapi-tutorial', displayName: 'Web API 教程演示' },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -8 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
+        timeout: 60000
+      } });
+      var r = cred.response;
+      if (!r.getPublicKey) { plog('浏览器不支持 response.getPublicKey()，无法在本地演示签名验证'); return; }
+      var rec = { id: b64url(cred.rawId), alg: r.getPublicKeyAlgorithm(), spki: b64url(r.getPublicKey()) };
+      localStorage.setItem(STORE, JSON.stringify(rec));
+      plog('✓ 注册成功');
+      plog('凭证 ID      = ' + rec.id.slice(0, 40) + '…');
+      plog('算法         = ' + rec.alg + '（' + ({ '-7': 'ES256 / ECDSA P-256', '-8': 'Ed25519', '-257': 'RS256' }[rec.alg] || '其他') + '）');
+      plog('公钥（SPKI） = ' + rec.spki.slice(0, 48) + '…');
+      plog('\n真实系统会把公钥发给服务器保存；这里保存在 localStorage。现在点「② 登录」。');
+    } catch (e) { plog('✗ ' + e.name + ': ' + e.message); }
+  };
+
+  document.getElementById('pk-login').onclick = async function () {
+    if (!supported) return;
+    var rec = saved(); po.textContent = '';
+    if (!rec) { plog('请先注册'); return; }
+    try {
+      var challenge = crypto.getRandomValues(new Uint8Array(32));
+      var a = await navigator.credentials.get({ publicKey: {
+        challenge: challenge,
+        allowCredentials: [{ type: 'public-key', id: fromB64url(rec.id) }],
+        userVerification: 'preferred', timeout: 60000
+      } });
+      var r = a.response;
+      var client = JSON.parse(dec.decode(r.clientDataJSON));
+      plog('clientDataJSON = ' + JSON.stringify(client));
+      plog('  type 正确？      ' + (client.type === 'webauthn.get'));
+      plog('  challenge 一致？ ' + (client.challenge === b64url(challenge)));
+      plog('  origin 一致？    ' + (client.origin === location.origin) + '（' + client.origin + '）');
+      var authData = new Uint8Array(r.authenticatorData);
+      var rpHash = hex(authData.slice(0, 32)), expect = hex(await subtle.digest('SHA-256', enc.encode(location.hostname)));
+      var flags = authData[32];
+      plog('authenticatorData：rpIdHash 一致？ ' + (rpHash === expect) + '，用户在场 UP=' + !!(flags & 1) + '，用户已验证 UV=' + !!(flags & 4) +
+        '，计数器=' + new DataView(authData.buffer, authData.byteOffset + 33, 4).getUint32(0));
+      var clientHash = new Uint8Array(await subtle.digest('SHA-256', r.clientDataJSON));
+      var signed = new Uint8Array(authData.length + clientHash.length); signed.set(authData); signed.set(clientHash, authData.length);
+      var spki = fromB64url(rec.spki), sig = new Uint8Array(r.signature), ok;
+      if (rec.alg === -7) {
+        var k = await subtle.importKey('spki', spki, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+        ok = await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, k, derToRaw(sig), signed);
+      } else if (rec.alg === -8) {
+        var k2 = await subtle.importKey('spki', spki, { name: 'Ed25519' }, false, ['verify']);
+        ok = await subtle.verify({ name: 'Ed25519' }, k2, sig, signed);
+      } else if (rec.alg === -257) {
+        var k3 = await subtle.importKey('spki', spki, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+        ok = await subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, k3, sig, signed);
+      } else { plog('本演示不支持算法 ' + rec.alg); return; }
+      plog('\n签名验证（crypto.subtle.verify）：' + (ok ? '✓ 通过 —— 登录成功' : '✗ 失败'));
+    } catch (e) { plog('✗ ' + e.name + ': ' + e.message); }
+  };
+
+  document.getElementById('pk-forget').onclick = function () {
+    localStorage.removeItem(STORE);
+    po.textContent = '已删除本地记录。系统 / 密码管理器中的 Passkey 需要到设置中手动删除。';
+  };
+})();
+</script>
+</body>
+</html>
