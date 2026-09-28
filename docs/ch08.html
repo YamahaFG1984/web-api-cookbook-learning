@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 8 章 · Web Animations API — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .ripple-button { position: relative; overflow: hidden; font-size: 15px !important; padding: 12px 28px !important;
+                   background: var(--accent) !important; color: #fff !important; border: none !important; border-radius: 10px !important; }
+  .ripple { background: white; pointer-events: none; transform-origin: center; opacity: 0; position: absolute; border-radius: 50%; }
+  .stage { position: relative; height: 90px; border: 1px dashed var(--line-2); border-radius: 8px; background: var(--panel-2); margin-top: 10px; overflow: hidden; }
+  .puck { position: absolute; left: 16px; top: 25px; width: 40px; height: 40px; border-radius: 8px; background: var(--accent); }
+  .loader { width: 48px; height: 48px; border-radius: 50%; border: 8px solid; border-color: skyblue var(--blue) skyblue var(--blue); opacity: 0; }
+  .scroll-demo { height: 160px; overflow: auto; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); }
+  .scroll-demo .bar { position: sticky; top: 0; height: 6px; background: var(--accent); transform-origin: left; transform: scaleX(0); }
+  .scroll-demo p { margin: 12px 16px; color: var(--fg-soft); font-size: 14px; }
+</style>
+</head>
+<body data-chapter="8">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 8 章</span>
+<h1>Web Animations API</h1>
+<p class="lede">
+  第 1 章用 <code>requestAnimationFrame</code> 手写了一个淡出动画：要记时间戳、算每帧的增量，代码不短。
+  CSS 动画写起来简单，却难以用 JS 精细控制。Web Animations API（简称 WAAPI）把两者的优点合在一起：
+  <strong>用关键帧描述动画，用 JS 对象控制播放</strong>。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>用 <code>element.animate(keyframes, options)</code> 创建动画，理解 <code>Animation</code> 对象</li>
+    <li>控制播放：暂停、继续、反向、取消，以及用 <code>finished</code> Promise 编排动画顺序</li>
+    <li>理解填充模式（fill）、缓动函数（easing）、合成模式（composite）</li>
+    <li>做出水波纹、入场退场、弹跳、加载动画、滚动进度条</li>
+    <li>尊重用户的「减弱动态效果」设置</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">三种做动画的方式</h2>
+
+<div class="tw">
+<table>
+  <tr><th></th><th>requestAnimationFrame</th><th>CSS 动画 / 过渡</th><th>Web Animations API</th></tr>
+  <tr><td>怎么描述</td><td>每一帧用 JS 算出样式</td><td>在 CSS 里写 <code>@keyframes</code></td><td>在 JS 里写关键帧数组</td></tr>
+  <tr><td>中间帧</td><td>自己算</td><td>浏览器插值</td><td>浏览器插值</td></tr>
+  <tr><td>运行时控制</td><td>完全自由，但全靠自己</td><td>很弱（改 class 触发）</td><td>暂停、反向、跳转、变速、等待完成</td></tr>
+  <tr><td>关键帧可以动态计算吗</td><td>可以</td><td>不行（除非用 CSS 变量）</td><td>可以</td></tr>
+  <tr><td>适合</td><td>Canvas、游戏、物理模拟</td><td>固定的状态切换</td><td>由交互驱动、需要编排的动画</td></tr>
+</table>
+</div>
+
+<p>先看同一个淡入效果的 CSS 写法和 WAAPI 写法：</p>
+
+<div class="vs">
+  <div class="old"><div class="h">CSS 关键帧</div>
+    <div class="code" data-lang="css" data-file="8-01-keyframe-animation.css">
+<script type="text/plain">
+@keyframes fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.some-element {
+  animation: fade 250ms;
+}
+</script>
+    </div>
+  </div>
+  <div class="new"><div class="h">Web Animations API</div>
+    <div class="code" data-lang="js" data-file="8-02-javascript-animation.js">
+<script type="text/plain">
+const element = document.querySelector('.some-element');
+
+element.animate([
+  { opacity: 0 },   // 相当于 from
+  { opacity: 1 }    // 相当于 to
+], {
+  duration: 250     // 250 毫秒
+});
+</script>
+    </div>
+  </div>
+</div>
+
+<p>
+  CSS 版在元素进入 DOM 或加上 class 时自动播放；WAAPI 版在调用 <code>animate()</code> 时播放。
+  <code>animate()</code> 返回一个 <code>Animation</code> 对象，这才是 WAAPI 真正强大的地方：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="element.animate 的输入与返回的 Animation 对象">
+  <rect class="bx-b" x="20" y="30" width="210" height="100" rx="10"/>
+  <text class="ttl on-b" x="125" y="54" text-anchor="middle">keyframes 关键帧</text>
+  <text class="mono" x="125" y="78" text-anchor="middle">[{ opacity: 0 },</text>
+  <text class="mono" x="125" y="96" text-anchor="middle"> { opacity: 1 }]</text>
+  <text class="sm" x="125" y="118" text-anchor="middle">「从什么样子变到什么样子」</text>
+
+  <rect class="bx-p" x="20" y="150" width="210" height="100" rx="10"/>
+  <text class="ttl on-p" x="125" y="174" text-anchor="middle">options 时间参数</text>
+  <text class="mono" x="125" y="196" text-anchor="middle">duration · delay · easing</text>
+  <text class="mono" x="125" y="214" text-anchor="middle">iterations · direction</text>
+  <text class="mono" x="125" y="232" text-anchor="middle">fill · composite</text>
+
+  <path class="ln" d="M232 80 H280 V130 H300" />
+  <path class="ln" d="M232 200 H280 V130 H300" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="304" y="100" width="150" height="60" rx="10"/>
+  <text class="mono on-a" x="379" y="126" text-anchor="middle">el.animate(…)</text>
+  <text class="sm" x="379" y="146" text-anchor="middle">立即开始播放</text>
+  <path class="ln-a" d="M456 130 H496" marker-end="url(#ar-a)"/>
+
+  <rect class="bx-g" x="500" y="20" width="240" height="230" rx="10"/>
+  <text class="ttl on-g" x="620" y="44" text-anchor="middle">Animation 对象</text>
+  <text class="mono" x="516" y="72">.play()  .pause()</text>
+  <text class="mono" x="516" y="94">.reverse()  .cancel()</text>
+  <text class="mono" x="516" y="116">.finish()</text>
+  <text class="mono" x="516" y="146">.playState</text>
+  <text class="mono" x="516" y="168">.currentTime  .playbackRate</text>
+  <text class="mono on-g" x="516" y="198">.finished → Promise</text>
+  <text class="sm" x="516" y="218">动画结束时兑现，可以 await</text>
+  <text class="mono" x="516" y="240">.commitStyles()</text>
+</svg>
+<figcaption>图 8-1　关键帧 + 时间参数 = 一个可以遥控的 Animation</figcaption>
+</figure>
+
+<h3>该对哪些属性做动画</h3>
+
+<p>
+  浏览器把页面画到屏幕上，大致分三步：<strong>布局</strong>（算位置和大小）→ <strong>绘制</strong>（画像素）→ <strong>合成</strong>（把图层叠起来）。
+  动画改动的属性越靠前，每一帧要重做的工作就越多：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="不同 CSS 属性触发渲染管线的不同阶段">
+  <rect class="bx-r" x="30" y="30" width="190" height="56" rx="10"/>
+  <text class="ttl on-r" x="125" y="54" text-anchor="middle">Layout 布局</text>
+  <text class="sm" x="125" y="74" text-anchor="middle">影响周围元素的位置</text>
+  <rect class="bx-a" x="285" y="30" width="190" height="56" rx="10"/>
+  <text class="ttl on-a" x="380" y="54" text-anchor="middle">Paint 绘制</text>
+  <text class="sm" x="380" y="74" text-anchor="middle">重新画像素</text>
+  <rect class="bx-g" x="540" y="30" width="190" height="56" rx="10"/>
+  <text class="ttl on-g" x="635" y="54" text-anchor="middle">Composite 合成</text>
+  <text class="sm" x="635" y="74" text-anchor="middle">GPU 移动 / 叠加图层</text>
+  <path class="ln" d="M222 58 H281" marker-end="url(#ar)"/>
+  <path class="ln" d="M477 58 H536" marker-end="url(#ar)"/>
+
+  <text class="mono on-r" x="125" y="116" text-anchor="middle">width · height</text>
+  <text class="mono on-r" x="125" y="134" text-anchor="middle">top · left · margin</text>
+  <text class="mono on-r" x="125" y="152" text-anchor="middle">padding · font-size</text>
+  <text class="mono on-a" x="380" y="116" text-anchor="middle">color · background</text>
+  <text class="mono on-a" x="380" y="134" text-anchor="middle">box-shadow</text>
+  <text class="mono on-g" x="635" y="116" text-anchor="middle">transform</text>
+  <text class="mono on-g" x="635" y="134" text-anchor="middle">opacity</text>
+  <text class="mono on-g" x="635" y="152" text-anchor="middle">filter（多数情况）</text>
+  <text class="sm on-r" x="125" y="186" text-anchor="middle">三步全部重做 → 容易卡顿</text>
+  <text class="sm on-g" x="635" y="186" text-anchor="middle">只做最后一步 → 最流畅</text>
+</svg>
+<figcaption>图 8-2　优先对 transform 和 opacity 做动画</figcaption>
+</figure>
+
+<h2 id="r8-1"><span class="rn">8.1</span>点击时的「水波纹」效果</h2>
+
+<p class="prob">点击按钮时，从点击的位置扩散出一圈水波纹（Material Design 风格）。</p>
+
+<div class="demo">
+  <div class="h">试一试：在按钮的不同位置点击，也可以快速连点</div>
+  <div class="b"><button class="ripple-button" id="ripple-btn">点我试试水波纹效果</button></div>
+</div>
+
+<p>每次点击时临时创建一个圆形元素，把它的中心放在点击位置，然后放大并淡出，结束后删掉：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="水波纹元素的定位与动画">
+  <rect class="bx-a" x="40" y="50" width="300" height="100" rx="12"/>
+  <text class="sm on-a" x="50" y="44">button（position: relative; overflow: hidden）</text>
+  <circle cx="220" cy="110" r="4" style="fill:var(--fg)"/>
+  <text class="sm" x="228" y="104">点击点</text>
+  <circle cx="220" cy="110" r="46" class="bx-b" style="fill:none;stroke-dasharray:4 3"/>
+  <path class="ln-b" d="M174 110 H220"/>
+  <text class="sm on-b" x="150" y="140">size/2</text>
+  <text class="sm" x="60" y="178">left = offsetX − size/2，top = offsetY − size/2 → 圆心落在点击点</text>
+
+  <path class="ln" d="M360 100 H400" marker-end="url(#ar)"/>
+  <circle cx="460" cy="100" r="8" style="fill:var(--blue);opacity:.5"/>
+  <text class="mono" x="460" y="140" text-anchor="middle">scale(0)</text>
+  <text class="sm" x="460" y="158" text-anchor="middle">opacity 0.5</text>
+  <path class="ln" d="M490 100 H530" marker-end="url(#ar)"/>
+  <circle cx="640" cy="100" r="70" style="fill:var(--blue);opacity:.08;stroke:var(--blue);stroke-dasharray:4 3"/>
+  <text class="mono" x="640" y="100" text-anchor="middle">scale(2.5)</text>
+  <text class="sm" x="640" y="118" text-anchor="middle">opacity 0</text>
+  <text class="sm" x="640" y="190" text-anchor="middle">await finished → ripple.remove()</text>
+</svg>
+<figcaption>图 8-3　水波纹 = 定位到点击点的圆 + 放大淡出</figcaption>
+</figure>
+
+<div class="code" data-lang="css" data-file="8-03-ripple-styles.css">
+<script type="text/plain">
+.ripple-button {
+  position: relative;   /* 让波纹的绝对定位以按钮为参照 */
+  overflow: hidden;     /* 超出按钮的部分不显示 */
+}
+
+.ripple {
+  background: white;
+  pointer-events: none; /* 波纹不接收点击，点击穿透到按钮 */
+  transform-origin: center;
+  opacity: 0;
+  position: absolute;
+  border-radius: 50%;
+  width: 150px;
+  height: 150px;
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="8-04-ripple-animation.js">
+<script type="text/plain">
+button.addEventListener('click', async event => {
+  // 创建临时的波纹元素并放进按钮
+  const ripple = document.createElement('div');
+  ripple.className = 'ripple';
+
+  // 取按钮宽高中较大的一个作为波纹尺寸
+  const rippleSize = Math.max(button.offsetWidth, button.offsetHeight);
+  ripple.style.width = `${rippleSize}px`;
+  ripple.style.height = `${rippleSize}px`;
+
+  // 让波纹的圆心落在点击位置
+  ripple.style.top = `${event.offsetY - (rippleSize / 2)}px`;
+  ripple.style.left = `${event.offsetX - (rippleSize / 2)}px`;
+
+  button.appendChild(ripple);
+
+  // 播放动画并等待结束
+  await ripple.animate([
+    { transform: 'scale(0)', opacity: 0.5 },
+    { transform: 'scale(2.5)', opacity: 0 }
+  ], {
+    duration: 500,
+    easing: 'ease-in'
+  }).finished;
+
+  // 结束后删除波纹元素
+  ripple.remove();
+});
+</script>
+</div>
+
+<ul>
+  <li><strong>绝对定位的参照物</strong>：<code>position: absolute</code> 的元素，相对于最近的「已定位」祖先（<code>position</code> 不是默认的 <code>static</code>）来定位。所以按钮要设 <code>position: relative</code>。</li>
+  <li><strong>为什么要 <code>pointer-events: none</code></strong>：如果点在正在扩散的波纹上，<code>event.offsetX/Y</code> 会以波纹为参照计算，新波纹的位置就错了。忽略指针事件后，点击直接落到按钮上。</li>
+  <li><strong>连续点击</strong>：每次点击都有自己的波纹元素和自己的动画，互不干扰。用纯 CSS 动画很难做到这点。</li>
+</ul>
+
+<h3>缓动函数（easing）</h3>
+
+<p>缓动函数决定动画「速度如何随时间变化」。横轴是时间，纵轴是进度：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="四种常用缓动函数的曲线">
+  <g>
+    <rect class="bx" x="30" y="30" width="150" height="90" rx="2" style="fill:var(--panel-2)"/>
+    <path class="ln-a" d="M30 120 L180 30" style="stroke-width:2.5"/>
+    <text class="mono" x="105" y="146" text-anchor="middle">linear</text>
+    <text class="sm" x="105" y="162" text-anchor="middle">匀速（WAAPI 默认）</text>
+  </g>
+  <g>
+    <rect class="bx" x="210" y="30" width="150" height="90" rx="2" style="fill:var(--panel-2)"/>
+    <path class="ln-a" d="M210 120 C273 120, 360 30, 360 30" style="stroke-width:2.5"/>
+    <text class="mono" x="285" y="146" text-anchor="middle">ease-in</text>
+    <text class="sm" x="285" y="162" text-anchor="middle">慢启动，越来越快</text>
+  </g>
+  <g>
+    <rect class="bx" x="390" y="30" width="150" height="90" rx="2" style="fill:var(--panel-2)"/>
+    <path class="ln-a" d="M390 120 C390 120, 477 30, 540 30" style="stroke-width:2.5"/>
+    <text class="mono" x="465" y="146" text-anchor="middle">ease-out</text>
+    <text class="sm" x="465" y="162" text-anchor="middle">快启动，逐渐减速</text>
+  </g>
+  <g>
+    <rect class="bx" x="570" y="30" width="150" height="90" rx="2" style="fill:var(--panel-2)"/>
+    <path class="ln-a" d="M570 120 C633 120, 657 30, 720 30" style="stroke-width:2.5"/>
+    <text class="mono" x="645" y="146" text-anchor="middle">ease-in-out</text>
+    <text class="sm" x="645" y="162" text-anchor="middle">两头慢，中间快</text>
+  </g>
+  <text class="sm" x="30" y="20">进度 ↑ 　时间 →</text>
+</svg>
+<figcaption>图 8-4　缓动曲线越陡，那一段动得越快</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; 默认值不一样！</div>
+  <p>
+    CSS <code>animation</code> / <code>transition</code> 的默认缓动是 <code>ease</code>，而 WAAPI 的默认是 <code>linear</code>。
+    直接把 CSS 动画「翻译」成 <code>animate()</code> 时，记得显式写上 <code>easing</code>。
+    经验法则：<strong>进场用 ease-out</strong>（快速出现、柔和停下），<strong>退场用 ease-in</strong>。
+    还可以写 <code>cubic-bezier(…)</code> 自定义，或用 <code>linear(…)</code> 函数描述弹簧效果（<span class="bl newly">Baseline 2023</span>）。
+  </p>
+</div>
+
+<h2 id="r8-2"><span class="rn">8.2</span>开始和停止动画</h2>
+
+<p class="prob">你想用代码暂停或继续一个动画。</p>
+
+<div class="code" data-lang="js" data-file="8-05-toggle.js">
+<script type="text/plain">
+/**
+ * 切换动画的播放状态：正在播放则暂停，否则继续
+ */
+function toggleAnimation(animation) {
+  if (animation.playState === 'running') {
+    animation.pause();
+  } else {
+    animation.play();
+  }
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 192" role="img" aria-label="Animation 的 playState 状态转换">
+  <rect class="bx" x="20" y="70" width="120" height="44" rx="22"/><text class="mono" x="80" y="97" text-anchor="middle">idle</text>
+  <rect class="bx-g" x="230" y="70" width="140" height="44" rx="22"/><text class="mono on-g" x="300" y="97" text-anchor="middle">running</text>
+  <rect class="bx-a" x="460" y="10" width="130" height="44" rx="22"/><text class="mono on-a" x="525" y="37" text-anchor="middle">paused</text>
+  <rect class="bx-b" x="460" y="126" width="130" height="44" rx="22"/><text class="mono on-b" x="525" y="153" text-anchor="middle">finished</text>
+  <path class="ln" d="M142 92 H226" marker-end="url(#ar)"/><text class="sm" x="184" y="84" text-anchor="middle">play()</text>
+  <path class="ln-a" d="M372 82 L456 40" marker-end="url(#ar-a)"/><text class="sm on-a" x="398" y="52">pause()</text>
+  <path class="ln-g" d="M470 56 L380 96" marker-end="url(#ar-g)"/><text class="sm on-g" x="440" y="92">play()</text>
+  <path class="ln-b" d="M372 102 L456 142" marker-end="url(#ar-b)"/><text class="sm on-b" x="452" y="182" text-anchor="end">播完 / finish()</text>
+  <path class="ln" d="M300 116 V160 H140 V116" marker-end="url(#ar)"/><text class="sm" x="220" y="174" text-anchor="middle">cancel()：回到 idle，效果被移除</text>
+  <text class="sm" x="610" y="96">finished 状态下再次</text>
+  <text class="sm" x="610" y="112">play() 会从头播放</text>
+</svg>
+<figcaption>图 8-5　playState 的四个取值：idle / running / paused / finished</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：控制一个无限循环的动画</div>
+  <div class="b">
+    <div class="row">
+      <button data-ctl="toggle">toggleAnimation</button>
+      <button data-ctl="reverse">reverse()</button>
+      <button data-ctl="rate">playbackRate × 2</button>
+      <button data-ctl="cancel">cancel()</button>
+      <span class="hint" id="ctl-state"></span>
+    </div>
+    <div class="stage"><div class="puck" id="ctl-puck"></div></div>
+  </div>
+</div>
+
+<h2 id="r8-3"><span class="rn">8.3</span>为插入和删除 DOM 元素加动画</h2>
+
+<p class="prob">往页面上添加或删除元素时，希望它淡入淡出，而不是突然出现或消失。</p>
+
+<p>两个方向的顺序正好相反：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="插入时先加入 DOM 再动画，删除时先动画再移除">
+  <text class="ttl on-g" x="20" y="26">插入：先放进去，再动画</text>
+  <rect class="bx" x="20" y="38" width="160" height="40" rx="8"/><text class="mono" x="100" y="63" text-anchor="middle">appendChild(el)</text>
+  <path class="ln-g" d="M182 58 H222" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="226" y="38" width="200" height="40" rx="8"/><text class="mono on-g" x="326" y="63" text-anchor="middle">animate(opacity 0→1)</text>
+  <text class="sm" x="440" y="62">只有在 DOM 里的元素才能播放动画</text>
+
+  <text class="ttl on-r" x="20" y="112">删除：先动画，播完再删</text>
+  <rect class="bx-r" x="20" y="124" width="200" height="40" rx="8"/><text class="mono on-r" x="120" y="149" text-anchor="middle">animate(opacity 1→0)</text>
+  <path class="ln-r" d="M222 144 H262" marker-end="url(#ar-r)"/>
+  <rect class="bx" x="266" y="124" width="150" height="40" rx="8"/><text class="mono" x="341" y="149" text-anchor="middle">await finished</text>
+  <path class="ln" d="M418 144 H458" marker-end="url(#ar)"/>
+  <rect class="bx" x="462" y="124" width="140" height="40" rx="8"/><text class="mono" x="532" y="149" text-anchor="middle">el.remove()</text>
+</svg>
+<figcaption>图 8-6　入场和退场的顺序</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="8-06-insert.js">
+<script type="text/plain">
+/**
+ * 把元素加入 DOM，并以淡入动画显示
+ */
+function showElement(element) {
+  document.body.appendChild(element);
+  element.animate([
+    { opacity: 0 },
+    { opacity: 1 }
+  ], {
+    duration: 250
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="8-07-remove.js">
+<script type="text/plain">
+/**
+ * 先播放淡出动画，结束后把元素从 DOM 中删除
+ */
+async function removeElement(element) {
+  // finished 是一个 Promise，动画结束时兑现
+  await element.animate([
+    { opacity: 1 },
+    { opacity: 0 }
+  ], {
+    duration: 250
+  }).finished;
+
+  // 动画结束，删除元素
+  element.remove();
+}
+</script>
+</div>
+
+<p>
+  插入时，因为动画和插入发生在同一帧，元素第一次被画出来时 opacity 就已经是 0，所以不会闪一下。
+  删除时一定要等 <code>finished</code>，否则动画还没播完元素就消失了。
+</p>
+
+<div class="box new">
+  <div class="t">&#10024; 纯 CSS 的入场 / 退场：<code>@starting-style</code></div>
+  <p>
+    CSS 过渡以前有两个老大难：元素刚插入时没有「起始样式」可以过渡；<code>display: none</code> 不能过渡。现在两者都有了解法：
+    <code>@starting-style</code> 定义入场的起点 <span class="bl newly">Baseline 2024</span>，
+    <code>transition-behavior: allow-discrete</code> 让 <code>display</code> 等离散属性参与过渡。第 13 章的对话框和弹出层会用到它们。
+  </p>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+.toast {
+  opacity: 1;
+  transition: opacity 250ms, display 250ms allow-discrete;
+  @starting-style { opacity: 0; }       /* 刚插入 / 刚显示时从这里开始 */
+}
+.toast[hidden] { display: none; opacity: 0; }  /* 隐藏时先淡出，最后才 display: none */
+</script>
+  </div>
+</div>
+
+<h2 id="r8-4"><span class="rn">8.4</span>反转动画</h2>
+
+<p class="prob">悬停效果进行到一半时鼠标移开了，你希望它从当前位置平滑地倒回去，而不是跳回起点。</p>
+
+<p>
+  思路：用一个变量记住正在进行的动画。事件发生时，如果已经有动画在跑，就调用 <code>reverse()</code> 让它掉头；否则新建一个。
+  因为「移入」和「移出」的关键帧只是方向相反，可以合并成一个函数，用 <code>direction</code> 选项区分：
+</p>
+
+<div class="code" data-lang="js" data-file="8-10-single-animation-function.js">
+<script type="text/plain">
+let animation;
+
+async function animate(element, direction) {
+  if (animation) {
+    // 已有动画在进行：不新建，而是让它掉头
+    animation.reverse();
+  } else {
+    animation = element.animate([
+      { transform: 'scale(1)' },
+      { transform: 'scale(2)' }
+    ], {
+      duration: 1000,
+      // 动画结束后保持最后一帧的样式（注意是 forwards，有 s；原书正文误写为 forward）
+      fill: 'forwards',
+      // 正向（normal）还是反向（reverse）播放
+      direction
+    });
+
+    // 动画结束（无论正向还是被反转回去）后，清空变量
+    await animation.finished;
+    animation = null;
+  }
+}
+
+// 用 mouseenter / mouseleave 而不是 mouseover / mouseout：
+// 后两者在鼠标经过子元素时也会触发，导致动画反复抽搐
+element.addEventListener('mouseenter', () => animate(element, 'normal'));
+element.addEventListener('mouseleave', () => animate(element, 'reverse'));
+</script>
+</div>
+
+<h3>填充模式（fill）</h3>
+
+<p>
+  默认情况下（<code>fill: 'none'</code>），动画只在播放期间生效，结束后元素会<strong>跳回</strong>原来的样式。
+  放大动画播完，元素又瞬间变回原大小 —— 这显然不是悬停效果想要的。填充模式决定动画「之前」和「之后」元素长什么样：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="四种 fill 模式在延迟期、播放期、结束后的表现">
+  <text class="sm" x="215" y="22" text-anchor="middle">delay 延迟期</text>
+  <text class="sm" x="415" y="22" text-anchor="middle">播放中</text>
+  <text class="sm" x="620" y="22" text-anchor="middle">结束后</text>
+  <path class="ln-d" d="M150 30 V220 M280 30 V220 M550 30 V220"/>
+
+  <text class="mono" x="20" y="56">none</text>
+  <rect class="bx" x="150" y="40" width="130" height="24" rx="3"/><text class="sm" x="215" y="57" text-anchor="middle">原样式</text>
+  <rect class="bx-a" x="280" y="40" width="270" height="24" rx="3"/><text class="sm on-a" x="415" y="57" text-anchor="middle">动画</text>
+  <rect class="bx" x="550" y="40" width="140" height="24" rx="3"/><text class="sm" x="620" y="57" text-anchor="middle">跳回原样式</text>
+
+  <text class="mono" x="20" y="100">backwards</text>
+  <rect class="bx-b" x="150" y="84" width="130" height="24" rx="3"/><text class="sm on-b" x="215" y="101" text-anchor="middle">第一帧样式</text>
+  <rect class="bx-a" x="280" y="84" width="270" height="24" rx="3"/><text class="sm on-a" x="415" y="101" text-anchor="middle">动画</text>
+  <rect class="bx" x="550" y="84" width="140" height="24" rx="3"/><text class="sm" x="620" y="101" text-anchor="middle">跳回原样式</text>
+
+  <text class="mono" x="20" y="144">forwards</text>
+  <rect class="bx" x="150" y="128" width="130" height="24" rx="3"/><text class="sm" x="215" y="145" text-anchor="middle">原样式</text>
+  <rect class="bx-a" x="280" y="128" width="270" height="24" rx="3"/><text class="sm on-a" x="415" y="145" text-anchor="middle">动画</text>
+  <rect class="bx-g" x="550" y="128" width="140" height="24" rx="3"/><text class="sm on-g" x="620" y="145" text-anchor="middle">保持最后一帧</text>
+
+  <text class="mono" x="20" y="188">both</text>
+  <rect class="bx-b" x="150" y="172" width="130" height="24" rx="3"/><text class="sm on-b" x="215" y="189" text-anchor="middle">第一帧样式</text>
+  <rect class="bx-a" x="280" y="172" width="270" height="24" rx="3"/><text class="sm on-a" x="415" y="189" text-anchor="middle">动画</text>
+  <rect class="bx-g" x="550" y="172" width="140" height="24" rx="3"/><text class="sm on-g" x="620" y="189" text-anchor="middle">保持最后一帧</text>
+</svg>
+<figcaption>图 8-7　backwards 管「开始之前」，forwards 管「结束之后」，both 两者都管</figcaption>
+</figure>
+
+<div class="box tip">
+  <div class="t">&#128161; fill: 'forwards' 的副作用与 commitStyles()</div>
+  <p>
+    带 <code>forwards</code> 的动画结束后仍然「活着」，它的样式会一直压在元素上，你之后用 <code>element.style</code> 改同一个属性会<strong>不生效</strong>。
+    更干净的做法是：结束后把最终样式「写回」元素，再取消动画：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const anim = el.animate([{ transform: 'scale(2)' }], { duration: 300, fill: 'forwards' });
+await anim.finished;
+anim.commitStyles();   // 把当前动画值写入 el.style
+anim.cancel();         // 移除动画，释放资源
+</script>
+  </div>
+  <p>另外，只写一个关键帧（如上例）时，浏览器会把元素的当前样式当作起点，这叫「隐式起始关键帧」。</p>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 悬停效果首选 CSS transition</div>
+  <p>
+    如果只是简单的悬停放大，<code>transition: transform 1s</code> 加上 <code>:hover { transform: scale(2) }</code> 就能自动实现「中途反转」，
+    不需要 JS。本节的技巧适用于由 JS 状态驱动、或需要等待动画结束再做下一步的场景。
+  </p>
+</div>
+
+<h2 id="r8-5"><span class="rn">8.5</span>滚动进度条</h2>
+
+<p class="prob">页面顶部显示一个进度条，随着页面向下滚动从左向右填满。</p>
+
+<p>
+  动画需要一条<strong>时间轴</strong>来决定进度。默认的时间轴是 <code>DocumentTimeline</code>，与时钟挂钩；
+  <code>ScrollTimeline</code> 则把「进度」换成了<strong>滚动位置</strong>：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="时间驱动的时间轴与滚动驱动的时间轴">
+  <text class="ttl on-b" x="20" y="26">DocumentTimeline（默认）</text>
+  <path class="ln-b" d="M20 50 H360" marker-end="url(#ar-b)"/>
+  <text class="sm" x="20" y="72">0ms</text><text class="sm" x="340" y="72">duration</text>
+  <text class="sm" x="20" y="92">时间一直往前走，动画自动播放到结束</text>
+
+  <text class="ttl on-a" x="400" y="26">ScrollTimeline</text>
+  <rect class="bx" x="400" y="40" width="120" height="150" rx="6"/>
+  <rect class="bx-a" x="506" y="44" width="10" height="40" rx="5"/>
+  <text class="sm" x="460" y="110" text-anchor="middle">滚动容器</text>
+  <path class="ln-a" d="M540 50 H720" marker-end="url(#ar-a)"/>
+  <text class="sm" x="540" y="72">scrollTop = 0</text><text class="sm" x="720" y="72" text-anchor="end">滚到底</text>
+  <text class="sm" x="540" y="96">进度 0%</text><text class="sm" x="720" y="96" text-anchor="end">进度 100%</text>
+  <text class="sm" x="540" y="130">往下滚动画前进，往上滚动画倒退，</text>
+  <text class="sm" x="540" y="148">不滚就停在原地</text>
+</svg>
+<figcaption>图 8-8　把时间轴换成滚动条，动画就跟着滚动走</figcaption>
+</figure>
+
+<div class="code" data-lang="css" data-file="8-11-progress-bar-styles.css">
+<script type="text/plain">
+.scroll-progress {
+  height: 8px;
+  transform-origin: left;   /* 从左边开始伸展 */
+  position: sticky;         /* 滚动时始终固定在顶部 */
+  top: 0;
+  transform: scaleX(0);     /* 初始宽度为 0，避免一开始闪一下满格 */
+  background: blue;
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="8-12-scroll-timeline.js">
+<script type="text/plain">
+const progress = document.querySelector('.scroll-progress');
+
+// 创建与整个文档滚动位置关联的时间轴
+// （document.documentElement 是 <html> 元素，也就是页面的主滚动容器）
+const timeline = new ScrollTimeline({
+  source: document.documentElement
+});
+
+// 把时间轴传给动画
+progress.animate(
+  [
+    { transform: 'scaleX(0)' },
+    { transform: 'scaleX(1)' }
+  ],
+  { timeline }
+);
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：滚动下面的盒子</div>
+  <div class="b">
+    <div class="scroll-demo" id="sd-root">
+      <div class="bar" id="sd-bar"></div>
+      <p>这个盒子的顶部有一条进度条。</p><p>它使用 ScrollTimeline（如果你的浏览器支持），否则回退到监听 scroll 事件。</p>
+      <p>继续往下滚……</p><p>……</p><p>……</p><p>快到了……</p><p>……</p><p>到底了！</p>
+    </div>
+    <p class="hint" id="sd-mode"></p>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 滚动驱动动画的现状与纯 CSS 写法</div>
+  <p>
+    <code>ScrollTimeline</code> 与 <code>ViewTimeline</code> 在 Chrome/Edge 115+ 与 Safari 26 中可用，Firefox 仍需手动开启实验开关。<span class="bl limited">有限支持</span>
+    使用前先做特性检测：<code>if ('ScrollTimeline' in window)</code>。同样的效果也可以完全用 CSS 实现：
+  </p>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+@keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.scroll-progress {
+  animation: grow linear both;
+  animation-timeline: scroll(root);   /* 根滚动容器 */
+}
+</script>
+  </div>
+</div>
+
+<h2 id="r8-6"><span class="rn">8.6</span>让元素弹跳</h2>
+
+<p class="prob">让一个元素短暂地弹跳几下，像受重力影响一样越弹越低。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="三次弹跳，高度依次为 40、20、10 像素">
+  <path class="ln" d="M20 140 H740" marker-end="url(#ar)"/>
+  <text class="sm" x="740" y="160" text-anchor="end">时间 →</text>
+  <path class="ln-a" d="M40 140 Q 140 -20, 240 140" style="stroke-width:2.5"/>
+  <path class="ln-a" d="M240 140 Q 340 60, 440 140" style="stroke-width:2.5"/>
+  <path class="ln-a" d="M440 140 Q 540 100, 640 140" style="stroke-width:2.5"/>
+  <text class="mono on-a" x="140" y="46" text-anchor="middle">-40px</text>
+  <text class="mono on-a" x="340" y="92" text-anchor="middle">-20px</text>
+  <text class="mono on-a" x="540" y="112" text-anchor="middle">-10px</text>
+  <text class="sm" x="140" y="160" text-anchor="middle">第 1 个 animate</text>
+  <text class="sm" x="340" y="160" text-anchor="middle">await → 第 2 个</text>
+  <text class="sm" x="540" y="160" text-anchor="middle">await → 第 3 个</text>
+</svg>
+<figcaption>图 8-9　三段动画依次播放，每段的关键帧都是动态计算的</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="8-13-bounce-animations.js">
+<script type="text/plain">
+async function animateBounce(element) {
+  const distances = ['40px', '20px', '10px'];
+
+  for (let distance of distances) {
+    // 等这一段动画播完，再进入下一次循环
+    await element.animate([
+      // 从底部开始
+      { transform: 'translateY(0)' },
+      // 在一半的时间点（offset: 0.5）到达最高点
+      { transform: `translateY(-${distance})`, offset: 0.5 },
+      // 回到底部
+      { transform: 'translateY(0)' }
+    ], {
+      duration: 250,
+      easing: 'ease-in-out'
+    }).finished;
+  }
+}
+</script>
+</div>
+
+<ul>
+  <li><strong>动态关键帧</strong>：每次循环用不同的 <code>distance</code>，这是 CSS <code>@keyframes</code> 做不到的。</li>
+  <li><strong><code>offset</code></strong> 指定关键帧出现在动画的哪个时间点（0 到 1）。不写时，关键帧会在时间上均匀分布。</li>
+  <li><strong>为什么用 <code>for...of</code> 而不是 <code>forEach</code></strong>：<code>forEach</code> 不会等待回调里的 <code>await</code>，三段动画会几乎同时开始，只能看到最后一段。<code>for...of</code>（或普通 <code>for</code> 循环）会老老实实地等。</li>
+</ul>
+
+<div class="demo">
+  <div class="h">试一试：弹跳</div>
+  <div class="b">
+    <div class="row"><button id="bounce-go">animateBounce()</button></div>
+    <div class="stage" style="height:110px"><div class="puck" id="bounce-puck" style="left:50%;top:60px;border-radius:50%"></div></div>
+  </div>
+</div>
+
+<h2 id="r8-7"><span class="rn">8.7</span>同时运行多个动画</h2>
+
+<p class="prob">一个元素要同时做两个 transform 动画：左右平移，并且自转。</p>
+
+<div class="code" data-lang="js" data-file="8-14-combine.js">
+<script type="text/plain">
+// 第一个动画：沿 x 轴来回移动
+element.animate([
+  { transform: 'translateX(0)' },
+  { transform: 'translateX(250px)' }
+], {
+  duration: 5000,
+  direction: 'alternate',   // 正着播完再倒着播
+  iterations: Infinity,     // 无限循环
+  easing: 'ease-in-out'
+});
+
+// 第二个动画：旋转
+element.animate([
+  { transform: 'rotate(0deg)' },
+  { transform: 'rotate(360deg)' }
+], {
+  duration: 3000,
+  iterations: Infinity,
+  composite: 'add'          // 与其他动画叠加，而不是覆盖
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="composite replace 与 add 的区别">
+  <rect class="bx-r" x="20" y="20" width="350" height="110" rx="10"/>
+  <text class="ttl on-r" x="195" y="44" text-anchor="middle">composite: 'replace'（默认）</text>
+  <text class="mono" x="195" y="72" text-anchor="middle">translateX(…)  ← 被覆盖</text>
+  <text class="mono" x="195" y="94" text-anchor="middle">rotate(…)      ← 生效</text>
+  <text class="sm on-r" x="195" y="118" text-anchor="middle">只转不动</text>
+  <rect class="bx-g" x="390" y="20" width="350" height="110" rx="10"/>
+  <text class="ttl on-g" x="565" y="44" text-anchor="middle">composite: 'add'</text>
+  <text class="mono" x="565" y="72" text-anchor="middle">transform:</text>
+  <text class="mono" x="565" y="94" text-anchor="middle">translateX(…) rotate(…)</text>
+  <text class="sm on-g" x="565" y="118" text-anchor="middle">边移动边旋转 ✓</text>
+</svg>
+<figcaption>图 8-10　两个动画改同一个属性时，默认后者覆盖前者</figcaption>
+</figure>
+
+<p>两个动画的时长、缓动都不一样，浏览器依然能每帧把它们平滑地合成为一个 transform。</p>
+
+<div class="box new">
+  <div class="t">&#10024; 更简单的办法：独立的变换属性</div>
+  <p>
+    CSS 现在有独立的 <code>translate</code>、<code>rotate</code>、<code>scale</code> 属性 <span class="bl wide">Baseline 广泛可用</span>。
+    它们是<strong>不同的属性</strong>，分别做动画天然不会互相覆盖，也就不需要 <code>composite</code>：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+element.animate({ translate: ['0', '250px'] },   { duration: 5000, direction: 'alternate', iterations: Infinity });
+element.animate({ rotate: ['0deg', '360deg'] }, { duration: 3000, iterations: Infinity });
+// 注意这里用了另一种关键帧写法：{ 属性: [值1, 值2] }
+</script>
+  </div>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：replace 与 add</div>
+  <div class="b">
+    <div class="row">
+      <button data-comp="replace">composite: 'replace'</button>
+      <button data-comp="add">composite: 'add'</button>
+      <button data-comp="stop">停止</button>
+    </div>
+    <div class="stage"><div class="puck" id="comp-puck"></div></div>
+  </div>
+</div>
+
+<h2 id="r8-8"><span class="rn">8.8</span>加载动画</h2>
+
+<p class="prob">等待网络请求时显示一个转圈的加载指示器。</p>
+
+<div class="code" data-lang="html" data-file="8-15-loader-element.html">
+<script type="text/plain">
+<style>
+  #loader {
+    width: 64px;
+    height: 64px;
+    /* 画成圆环 */
+    border-radius: 50%;
+    border-width: 10px;
+    border-style: solid;
+    border-color: skyblue blue skyblue blue;
+    /* 初始透明，淡入时才平滑 */
+    opacity: 0;
+  }
+</style>
+<div id="loader"></div>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="8-16-loader-animation.js">
+<script type="text/plain">
+async function showLoader(promise) {
+  const loader = document.querySelector('#loader');
+
+  // 先开始无限旋转（此时 opacity 为 0，还看不见）
+  const spin = loader.animate([
+    { transform: 'rotate(0deg)' },
+    { transform: 'rotate(360deg)' }
+  ], { duration: 1000, iterations: Infinity });
+
+  // 淡入。旋转动画同时在进行
+  loader.animate([
+    { opacity: 0 },
+    { opacity: 1 }
+  ], { duration: 500, fill: 'both' });
+
+  // 等待请求完成
+  await promise;
+
+  // 淡出，并且等淡出结束后才停止旋转
+  await loader.animate([
+    { opacity: 1 },
+    { opacity: 0 }
+  ], { duration: 500, fill: 'both' }).finished;
+
+  spin.cancel();
+
+  // 返回原来的 Promise，方便链式调用
+  return promise;
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="8-17-using-loader.js">
+<script type="text/plain">
+showLoader(
+  fetch('https://example.com/api/users')
+    .then(response => response.json())
+);
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：模拟一个 2 秒的请求</div>
+  <div class="b">
+    <div class="row"><button id="loader-go">showLoader(模拟请求)</button><span class="hint" id="loader-msg"></span></div>
+    <div style="padding:10px"><div class="loader" id="demo-loader"></div></div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 小改进：请求很快时就别显示加载动画</div>
+  <p>
+    如果请求 100ms 就回来了，加载圈会「闪」一下，反而让人觉得卡。可以先等 300ms 左右，请求还没完成才开始显示：
+    <code>const slow = await Promise.race([promise.then(() =&gt; false), delay(300).then(() =&gt; true)])</code>，只有 <code>slow</code> 为 <code>true</code> 时才播放淡入。
+  </p>
+</div>
+
+<h2 id="r8-9"><span class="rn">8.9</span>尊重用户的动画偏好</h2>
+
+<p class="prob">用户在操作系统里开启了「减弱动态效果」，你的动画应该收敛或关闭。</p>
+
+<div class="code" data-lang="js" data-file="8-18-check-reduced-motion.js">
+<script type="text/plain">
+if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  // 用户没有要求减少动画：正常播放
+} else {
+  // 跳过这个动画，或者换成一个更温和的
+}
+</script>
+</div>
+
+<p>
+  这对无障碍<strong>极其重要</strong>：大幅度或快速的运动可能让前庭障碍用户头晕恶心，甚至诱发癫痫或偏头痛。
+  「减少」不等于「全部关掉」：可以把弹跳换成简单的淡入，把大范围位移换成透明度变化。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 封装一个统一的入口</div>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+function safeAnimate(element, keyframes, options, fallbackKeyframes = [{ opacity: 0 }, { opacity: 1 }]) {
+  return reduceMotion.matches
+    ? element.animate(fallbackKeyframes, { duration: 150 })  // 温和版本
+    : element.animate(keyframes, options);
+}
+
+// 用户在系统设置里切换时，matchMedia 会触发 change 事件（第 17 章详解）
+reduceMotion.addEventListener('change', () => { /* 更新状态 */ });
+</script>
+  </div>
+  <p>CSS 里同样可以用 <code>@media (prefers-reduced-motion: reduce) { … }</code> 关闭过渡。</p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li><code>element.animate(keyframes, options)</code> 返回 <code>Animation</code> 对象，可以 <code>play / pause / reverse / cancel / finish</code>，并用 <code>finished</code> Promise 等待结束。</li>
+  <li>优先对 <code>transform</code> 和 <code>opacity</code> 做动画；WAAPI 默认缓动是 <code>linear</code>。</li>
+  <li><code>fill</code> 决定动画前后的样式；<code>forwards</code> 之后可以 <code>commitStyles()</code> + <code>cancel()</code> 收尾。</li>
+  <li>多个 transform 动画用 <code>composite: 'add'</code> 叠加，或改用独立的 <code>translate / rotate / scale</code> 属性。</li>
+  <li><code>ScrollTimeline</code> 让动画跟随滚动，使用前做特性检测；CSS 的 <code>animation-timeline</code> 是同一能力的声明式版本。</li>
+  <li>始终检查 <code>prefers-reduced-motion</code>。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个待办列表：新增项从上方滑入，删除项先向右滑出并淡出，再从 DOM 中移除。</li>
+    <li>用 <code>animation.currentTime</code> 做一个「拖动滑块控制动画进度」的演示（提示：先 <code>pause()</code>，再根据 <code>&lt;input type="range"&gt;</code> 的值设置 <code>currentTime</code>）。</li>
+    <li>改写 8.8 节的 <code>showLoader</code>：请求在 300ms 内完成时完全不显示加载圈。</li>
+    <li>给本章所有动画加上 <code>prefers-reduced-motion</code> 支持，并在系统设置中打开「减弱动态效果」验证。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---- 水波纹 ----
+  var btn = document.getElementById('ripple-btn');
+  btn.addEventListener('click', async function (event) {
+    var ripple = document.createElement('div');
+    ripple.className = 'ripple';
+    var size = Math.max(btn.offsetWidth, btn.offsetHeight);
+    ripple.style.width = ripple.style.height = size + 'px';
+    ripple.style.top = (event.offsetY - size / 2) + 'px';
+    ripple.style.left = (event.offsetX - size / 2) + 'px';
+    btn.appendChild(ripple);
+    await ripple.animate([{ transform: 'scale(0)', opacity: 0.5 }, { transform: 'scale(2.5)', opacity: 0 }],
+      { duration: 500, easing: 'ease-in' }).finished;
+    ripple.remove();
+  });
+
+  // ---- 播放控制 ----
+  var puck = document.getElementById('ctl-puck'), st = document.getElementById('ctl-state');
+  var stage = puck.parentElement;
+  function makeAnim() {
+    return puck.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(' + (stage.clientWidth - 72) + 'px)' }],
+      { duration: 2000, direction: 'alternate', iterations: Infinity, easing: 'ease-in-out' });
+  }
+  var anim = makeAnim();
+  function show() { st.textContent = 'playState = ' + anim.playState + '，playbackRate = ' + anim.playbackRate; }
+  document.querySelectorAll('[data-ctl]').forEach(function (b) {
+    b.onclick = function () {
+      var c = b.dataset.ctl;
+      if (c === 'toggle') { anim.playState === 'running' ? anim.pause() : anim.play(); }
+      if (c === 'reverse') anim.reverse();
+      if (c === 'rate') anim.updatePlaybackRate(anim.playbackRate * 2 > 8 ? 1 : anim.playbackRate * 2);
+      if (c === 'cancel') anim.cancel();
+      setTimeout(show, 30);
+    };
+  });
+  show();
+
+  // ---- 滚动进度 ----
+  var root = document.getElementById('sd-root'), bar = document.getElementById('sd-bar'), mode = document.getElementById('sd-mode');
+  if ('ScrollTimeline' in window) {
+    bar.animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { timeline: new ScrollTimeline({ source: root }), fill: 'both' });
+    mode.textContent = '当前使用：ScrollTimeline ✓';
+  } else {
+    root.addEventListener('scroll', function () {
+      bar.style.transform = 'scaleX(' + root.scrollTop / (root.scrollHeight - root.clientHeight) + ')';
+    });
+    mode.textContent = '你的浏览器不支持 ScrollTimeline，已回退到 scroll 事件。';
+  }
+
+  // ---- 弹跳 ----
+  var bp = document.getElementById('bounce-puck');
+  document.getElementById('bounce-go').onclick = async function () {
+    if (reduce) { await bp.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 300 }).finished; return; }
+    for (var d of ['40px', '20px', '10px']) {
+      await bp.animate([{ transform: 'translateY(0)' }, { transform: 'translateY(-' + d + ')', offset: 0.5 }, { transform: 'translateY(0)' }],
+        { duration: 250, easing: 'ease-in-out' }).finished;
+    }
+  };
+
+  // ---- composite ----
+  var cp = document.getElementById('comp-puck'), running = [];
+  document.querySelectorAll('[data-comp]').forEach(function (b) {
+    b.onclick = function () {
+      running.forEach(function (a) { a.cancel(); }); running = [];
+      if (b.dataset.comp === 'stop') return;
+      var w = cp.parentElement.clientWidth - 72;
+      running.push(cp.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(' + w + 'px)' }],
+        { duration: 5000, direction: 'alternate', iterations: Infinity, easing: 'ease-in-out' }));
+      running.push(cp.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }],
+        { duration: 3000, iterations: Infinity, composite: b.dataset.comp }));
+    };
+  });
+
+  // ---- loader ----
+  var loader = document.getElementById('demo-loader'), msg = document.getElementById('loader-msg');
+  document.getElementById('loader-go').onclick = async function () {
+    msg.textContent = '请求中…';
+    var p = new Promise(function (r) { setTimeout(function () { r('数据'); }, 2000); });
+    var spin = loader.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 1000, iterations: Infinity });
+    loader.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 500, fill: 'both' });
+    await p;
+    await loader.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 500, fill: 'both' }).finished;
+    spin.cancel();
+    msg.textContent = '完成 ✓';
+  };
+})();
+</script>
+</body>
+</html>

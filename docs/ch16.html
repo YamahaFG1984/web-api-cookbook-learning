@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 16 章 · 控制台 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .mini-console { margin-top: 10px; border-radius: 8px; background: var(--code-bg); color: var(--code-fg);
+                  font-family: var(--mono); font-size: 12.5px; line-height: 1.6; max-height: 320px; overflow: auto; }
+  .mini-console .ln { padding: 3px 10px; border-bottom: 1px solid rgba(255,255,255,.06); white-space: pre-wrap; word-break: break-word; }
+  .mini-console .warn  { background: rgba(255, 196, 0, .12); color: #ffd666; }
+  .mini-console .error { background: rgba(255, 80, 80, .14); color: #ff9a9a; }
+  .mini-console .info  { color: #9cd3ff; }
+  .mini-console .group { font-weight: 700; }
+  .mini-console table { border-collapse: collapse; margin: 4px 0; background: transparent; font-size: 12px; width: auto; border-radius: 0; overflow: visible; }
+  .mini-console th, .mini-console td { border: 1px solid rgba(255,255,255,.18); padding: 2px 8px; color: var(--code-fg); background: transparent; }
+  .mini-console th { background: rgba(255,255,255,.08); }
+</style>
+</head>
+<body data-chapter="16">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 16 章</span>
+<h1>把控制台用到极致</h1>
+<p class="lede">
+  浏览器的调试器能单步执行、查看变量，功能强大。但很多时候，一句 <code>console.log</code> 才是最快的调试手段。
+  其实 <code>console</code> 远不止 <code>log</code>：它能输出带样式的文字、表格、分组、计时、计数、调用栈和断言。
+  本章把这些「冷门但好用」的方法一次讲清。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>用 <code>%c</code> 给输出加样式，用日志级别区分信息、警告、错误</li>
+    <li>用 <code>bind</code> 创建带模块前缀的日志函数</li>
+    <li>用 <code>console.table</code>、<code>group</code>、<code>time</code>、<code>count</code> 组织和度量输出</li>
+    <li>用 <code>trace</code>、<code>assert</code>、<code>dir</code> 辅助排查问题</li>
+    <li>了解开发者工具中与控制台配合的实用技巧</li>
+  </ul>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 本章的演示</div>
+  <p>
+    每个演示按钮都会同时做两件事：真正调用 <code>console</code>（按 <kbd>F12</kbd> 或 <kbd>Cmd</kbd>+<kbd>Opt</kbd>+<kbd>J</kbd> 打开开发者工具查看），
+    并在页面上的「迷你控制台」里模拟显示效果，方便你在手机上也能看到。
+  </p>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">console 方法地图</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="按用途分类的 console 方法">
+  <rect class="bx-a" x="300" y="100" width="160" height="48" rx="12"/>
+  <text class="ttl on-a" x="380" y="130" text-anchor="middle">console</text>
+
+  <rect class="bx-b" x="20" y="16" width="220" height="64" rx="10"/>
+  <text class="ttl on-b" x="130" y="38" text-anchor="middle">输出与级别</text>
+  <text class="mono" x="130" y="58" text-anchor="middle">log · info · warn · error</text>
+  <text class="mono" x="130" y="74" text-anchor="middle">debug · %c 样式</text>
+
+  <rect class="bx-g" x="270" y="16" width="220" height="64" rx="10"/>
+  <text class="ttl on-g" x="380" y="38" text-anchor="middle">结构化</text>
+  <text class="mono" x="380" y="58" text-anchor="middle">table · group</text>
+  <text class="mono" x="380" y="74" text-anchor="middle">groupCollapsed · groupEnd</text>
+
+  <rect class="bx-p" x="520" y="16" width="220" height="64" rx="10"/>
+  <text class="ttl on-p" x="630" y="38" text-anchor="middle">度量</text>
+  <text class="mono" x="630" y="58" text-anchor="middle">time · timeLog · timeEnd</text>
+  <text class="mono" x="630" y="74" text-anchor="middle">count · countReset</text>
+
+  <rect class="bx-r" x="20" y="170" width="220" height="64" rx="10"/>
+  <text class="ttl on-r" x="130" y="192" text-anchor="middle">排错</text>
+  <text class="mono" x="130" y="212" text-anchor="middle">trace · assert</text>
+  <text class="mono" x="130" y="228" text-anchor="middle">error（带调用栈）</text>
+
+  <rect class="bx" x="270" y="170" width="220" height="64" rx="10"/>
+  <text class="ttl" x="380" y="192" text-anchor="middle">查看对象</text>
+  <text class="mono" x="380" y="212" text-anchor="middle">dir · dirxml</text>
+  <text class="mono" x="380" y="228" text-anchor="middle">log({ 变量 })</text>
+
+  <rect class="bx-d" x="520" y="170" width="220" height="64" rx="10"/>
+  <text class="ttl" x="630" y="192" text-anchor="middle">清理</text>
+  <text class="mono" x="630" y="212" text-anchor="middle">clear</text>
+  <text class="sm" x="630" y="228" text-anchor="middle">（或控制台的🚫按钮）</text>
+
+  <path class="ln" d="M130 82 L320 100 M380 82 V98 M630 82 L440 100 M130 168 L320 150 M380 168 V150 M630 168 L440 150"/>
+</svg>
+<figcaption>图 16-1　console 对象的方法，按用途分成六类</figcaption>
+</figure>
+
+<h2 id="r16-1"><span class="rn">16.1</span>给控制台输出加样式</h2>
+
+<p class="prob">你想让某条日志更醒目：更大的字号、不同的颜色。</p>
+
+<div class="code" data-lang="js" data-file="16-01-styling-console-output.js">
+<script type="text/plain">
+console.log('%cHello world!', 'font-size: 2rem; color: red;');
+
+console.log('This console message uses %cstyled text. %cCool!',
+  'font-style: italic;',
+  'font-weight: bold;'
+);
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="每个 %c 对应一个样式参数">
+  <text class="mono" x="20" y="36">console.log(</text>
+  <text class="mono" x="40" y="60">'This console message uses <tspan class="on-a">%c</tspan>styled text. <tspan class="on-b">%c</tspan>Cool!',</text>
+  <text class="mono on-a" x="40" y="84">'font-style: italic;',</text>
+  <text class="mono on-b" x="40" y="108">'font-weight: bold;'</text>
+  <text class="mono" x="20" y="132">)</text>
+  <path class="ln-a" d="M252 66 C 252 76, 220 76, 200 78" marker-end="url(#ar-a)"/>
+  <path class="ln-b" d="M392 66 C 400 94, 260 100, 196 102" marker-end="url(#ar-b)"/>
+  <rect class="bx-d" x="470" y="40" width="270" height="80" rx="8"/>
+  <text class="sm" x="486" y="62">输出：</text>
+  <text x="486" y="90" style="font-size:13px">This console message uses <tspan font-style="italic">styled text. </tspan><tspan font-weight="bold">Cool!</tspan></text>
+  <text class="sm" x="486" y="110">每个 %c 都从零开始，样式不会叠加</text>
+</svg>
+<figcaption>图 16-2　第 n 个 %c 使用第 n 个额外参数作为 CSS</figcaption>
+</figure>
+
+<p>
+  <code>console.log</code> 接受任意多个参数。每出现一个 <code>%c</code>，就要多传一个 CSS 字符串参数，作用于它后面的文字，直到下一个 <code>%c</code> 为止。
+  样式在每个 <code>%c</code> 处都会<strong>重置</strong>：上例中第一段的斜体不会延续到第二段。除了 <code>%c</code>，还有 <code>%s</code>（字符串）、<code>%d</code>（整数）、<code>%o</code>（对象）等占位符。
+</p>
+
+<div class="demo">
+  <div class="h">试一试：带样式的输出</div>
+  <div class="b">
+    <div class="row"><button id="b-style">运行 16-01</button></div>
+    <div class="mini-console" id="mc-style"></div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 彩蛋式的应用</div>
+  <p>很多大公司会在自己网站的控制台里用 <code>%c</code> 打印一个大号的招聘广告 —— 打开开发者工具的人，大概率就是开发者。</p>
+</div>
+
+<h2 id="r16-2"><span class="rn">16.2</span>使用日志级别</h2>
+
+<p class="prob">区分普通信息、警告和错误，并能在控制台中按级别筛选。</p>
+
+<div class="code" data-lang="js" data-file="16-02-using-log-levels.js">
+<script type="text/plain">
+console.info('This is an info message');
+console.warn('This is a warning message');
+console.error('This is an error message');
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>方法</th><th>Chrome 中的显示</th><th>控制台过滤级别</th></tr>
+  <tr><td><code>console.debug</code></td><td>普通样式</td><td>Verbose（详细）—— <strong>默认隐藏</strong></td></tr>
+  <tr><td><code>console.log</code> / <code>console.info</code></td><td>普通样式</td><td>Info（信息）</td></tr>
+  <tr><td><code>console.warn</code></td><td>黄色背景 + ⚠ 图标，可展开调用栈</td><td>Warnings（警告）</td></tr>
+  <tr><td><code>console.error</code></td><td>红色背景 + ✖ 图标，可展开调用栈</td><td>Errors（错误）</td></tr>
+</table>
+</div>
+
+<p>警告和错误还会附带可展开的<strong>调用栈</strong>，方便定位问题出在哪里。在控制台顶部的级别下拉框里，可以只看错误、隐藏普通日志。</p>
+
+<div class="demo">
+  <div class="h">试一试：三种级别</div>
+  <div class="b">
+    <div class="row"><button id="b-levels">运行 16-02</button></div>
+    <div class="mini-console" id="mc-levels"></div>
+  </div>
+</div>
+
+<h2 id="r16-3"><span class="rn">16.3</span>创建带名字的日志函数</h2>
+
+<p class="prob">应用有多个模块，你希望每条日志都带着彩色的模块名前缀，一眼看出是谁打的。</p>
+
+<div class="code" data-lang="js" data-file="16-03-create-named-logger.js">
+<script type="text/plain">
+function createLogger(name, color) {
+  return console.log.bind(console, `%c${name}`, `color: ${color};`);
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="16-04-using-named-logger.js">
+<script type="text/plain">
+const rendererLogger = createLogger('renderer', 'blue');
+const dataLogger = createLogger('data', 'green');
+
+rendererLogger('Rendering component');   // 蓝色的 "renderer" 前缀
+dataLogger('Fetching data');             // 绿色的 "data" 前缀
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="bind 实现参数的部分应用">
+  <rect class="bx-b" x="20" y="20" width="360" height="56" rx="10"/>
+  <text class="mono on-b" x="200" y="44" text-anchor="middle">console.log.bind(console,</text>
+  <text class="mono on-b" x="200" y="64" text-anchor="middle">'%crenderer', 'color: blue;')</text>
+  <path class="ln" d="M382 48 H430" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="434" y="20" width="306" height="56" rx="10"/>
+  <text class="mono on-g" x="587" y="44" text-anchor="middle">rendererLogger</text>
+  <text class="sm" x="587" y="64" text-anchor="middle">「预先填好前两个参数」的新函数</text>
+
+  <text class="mono" x="20" y="110">rendererLogger('Rendering component', 42)</text>
+  <text class="sm" x="20" y="130">等价于</text>
+  <text class="mono" x="20" y="152">console.log(<tspan class="on-b">'%crenderer', 'color: blue;'</tspan>, 'Rendering component', 42)</text>
+</svg>
+<figcaption>图 16-3　bind 把一部分参数「提前绑定」，其余参数调用时再补上</figcaption>
+</figure>
+
+<p>
+  <code>bind</code> 的第一个参数设定 <code>this</code>（这里保持为 <code>console</code>），之后的参数会被固定在最前面 —— 这叫<strong>偏函数应用</strong>（partial application）。
+  用 <code>bind</code> 而不是包一层 <code>(...args) =&gt; console.log(...)</code> 还有一个好处：控制台显示的<strong>源码位置是调用处</strong>，而不是包装函数内部，点击就能跳到真正打日志的那一行。
+</p>
+
+<div class="demo">
+  <div class="h">试一试：命名日志函数</div>
+  <div class="b">
+    <div class="row"><button id="b-named">运行 16-04</button></div>
+    <div class="mini-console" id="mc-named"></div>
+  </div>
+</div>
+
+<h2 id="r16-4"><span class="rn">16.4</span>以表格显示对象数组</h2>
+
+<p class="prob">你有一个对象数组，想以易读的方式输出。</p>
+
+<div class="code" data-lang="js" data-file="16-05-logging-table.js">
+<script type="text/plain">
+const users = [
+  { firstName: "John", lastName: "Smith", department: "Sales" },
+  { firstName: "Emily", lastName: "Johnson", department: "Marketing" },
+  { firstName: "Michael", lastName: "Davis", department: "Human Resources" },
+  { firstName: "Sarah", lastName: "Thompson", department: "Finance" },
+  { firstName: "David", lastName: "Wilson", department: "Engineering" }
+];
+
+console.table(users);
+</script>
+</div>
+
+<p>第二个参数可以只显示指定的列；传入普通对象时，第一列（index）显示的是属性名：</p>
+
+<div class="code" data-lang="js" data-file="16-06 / 16-07">
+<script type="text/plain">
+// 只显示 firstName 和 lastName 两列
+console.table(users, ['firstName', 'lastName']);
+
+// 传入对象：index 列是属性名
+console.table({
+  name: 'sysadmin',
+  email: 'admin@example.com'
+});
+</script>
+</div>
+
+<p>控制台中的表格还可以<strong>点击列标题排序</strong>。</p>
+
+<div class="demo">
+  <div class="h">试一试：console.table</div>
+  <div class="b">
+    <div class="row">
+      <button id="b-table">console.table(users)</button>
+      <button id="b-table2">只显示两列</button>
+      <button id="b-table3">传入对象</button>
+    </div>
+    <div class="mini-console" id="mc-table"></div>
+  </div>
+</div>
+
+<h2 id="r16-5"><span class="rn">16.5</span>控制台计时器</h2>
+
+<p class="prob">调试时想快速看看一段代码花了多长时间。</p>
+
+<div class="code" data-lang="js" data-file="16-08-using-timers.js">
+<script type="text/plain">
+// 启动名为 loadTransactions 的计时器
+console.time('loadTransactions');
+
+// 加载数据
+const data = await fetch('/api/users/123/transactions');
+
+// 停止计时器，打印："loadTransactions: 123.45 ms"
+console.timeEnd('loadTransactions');
+</script>
+</div>
+
+<ul>
+  <li>名字就是计时器的 ID，可以同时运行多个不同名字的计时器。</li>
+  <li><code>timeEnd</code> 一个不存在的计时器不会抛错，只会打印一条警告。</li>
+  <li>中途想看一眼又不想停止？用 <code>console.timeLog('loadTransactions', '已拿到响应头')</code>。</li>
+</ul>
+
+<div class="tw">
+<table>
+  <tr><th></th><th><code>console.time / timeEnd</code></th><th><code>performance.mark / measure</code>（第 15 章）</th></tr>
+  <tr><td>用途</td><td>临时调试</td><td>正式的性能监控</td></tr>
+  <tr><td>结果去哪了</td><td>只打印在控制台，<code>timeEnd</code> 后计时器销毁</td><td>作为条目保存在性能缓冲区，可以查询、观察、上报</td></tr>
+  <tr><td>开发者工具「性能」面板中可见</td><td>否</td><td>是</td></tr>
+</table>
+</div>
+
+<h2 id="r16-6"><span class="rn">16.6</span>控制台分组</h2>
+
+<p class="prob">日志太多太乱，你想把相关的日志归成一组，可以折叠和展开。</p>
+
+<div class="code" data-lang="js" data-file="16-09-using-groups.js">
+<script type="text/plain">
+console.log('Updating user data');
+
+for (const user of users) {
+  console.group(`User: ${user.firstName} ${user.lastName}`);   // 开始一个分组
+
+  console.log('Loading employee data from API');
+  const response = await fetch(`/api/users/${user.id}`);
+  const userData = await response.json();
+
+  console.log('Updating profile');
+  userData.lastUpdated = Date.now();
+
+  console.log('Saving user data');
+  await fetch(`/api/users/${user.id}`, {
+    method: 'POST',
+    body: JSON.stringify(userData),
+    headers: { 'Content-Type': 'application/json' }
+  });
+
+  console.groupEnd();                                          // 结束分组
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="控制台分组的层级结构">
+  <rect x="20" y="10" width="440" height="190" rx="8" style="fill:var(--code-bg)"/>
+  <g class="mono" style="font-size:12px">
+    <text x="34" y="34" style="fill:var(--code-fg)">Updating user data</text>
+    <text x="34" y="58" style="fill:#82c8e8">▼ User: John Smith</text>
+    <text x="64" y="80" style="fill:var(--code-fg)">Loading employee data from API</text>
+    <text x="64" y="100" style="fill:var(--code-fg)">Updating profile</text>
+    <text x="64" y="120" style="fill:var(--code-fg)">Saving user data</text>
+    <text x="34" y="144" style="fill:#82c8e8">▶ User: Emily Johnson</text>
+    <text x="34" y="166" style="fill:#82c8e8">▶ User: Michael Davis</text>
+    <text x="34" y="188" style="fill:#82c8e8">▶ …</text>
+  </g>
+  <path class="ln-d" d="M52 64 V124"/>
+  <text class="sm" x="490" y="60">group(label) 开始一组，后续日志缩进</text>
+  <text class="sm" x="490" y="80">groupEnd() 结束当前组</text>
+  <text class="sm" x="490" y="112">可以嵌套多层，适合追踪递归、</text>
+  <text class="sm" x="490" y="128">复杂算法的每一步</text>
+  <text class="sm" x="490" y="160">groupCollapsed(label)：默认折叠</text>
+</svg>
+<figcaption>图 16-4　分组让大量日志变得有层次</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：嵌套分组</div>
+  <div class="b">
+    <div class="row"><button id="b-group">运行分组示例</button></div>
+    <div class="mini-console" id="mc-group"></div>
+  </div>
+</div>
+
+<h2 id="r16-7"><span class="rn">16.7</span>计数器</h2>
+
+<p class="prob">你想知道某段代码被执行了多少次。</p>
+
+<div class="code" data-lang="js" data-file="16-10-using-counters.js">
+<script type="text/plain">
+users.forEach(user => {
+  console.count('user');
+});
+</script>
+</div>
+
+<div class="code" data-lang="text" data-file="16-11-counter-output.txt">
+<pre>
+user: 1
+user: 2
+user: 3
+user: 4
+user: 5
+</pre>
+</div>
+
+<p>
+  适合追踪循环次数、递归调用次数、事件处理函数触发了几次（比如排查「为什么这个监听器执行了两次」）。
+  不传参数时使用名为 <code>default</code> 的计数器；<code>console.countReset('user')</code> 可以归零。
+  和其他 console 方法一样，它是调试工具，不应该用来统计生产环境的使用数据。
+</p>
+
+<h2 id="r16-8"><span class="rn">16.8</span>同时打印变量名和值</h2>
+
+<p class="prob">打印变量时想同时看到它的名字，又懒得把名字打两遍。</p>
+
+<div class="vs">
+  <div class="old"><div class="h">以前</div>
+    <div class="code" data-lang="js" data-file="16-13-without-object-shorthand.js">
+<script type="text/plain">
+const username = 'sysadmin';
+console.log('username', username);
+</script>
+    </div>
+  </div>
+  <div class="new"><div class="h">对象简写</div>
+    <div class="code" data-lang="js" data-file="16-12-logging-variable-and-value.js">
+<script type="text/plain">
+const username = 'sysadmin';
+// 输出 { username: 'sysadmin' }
+console.log({ username });
+</script>
+    </div>
+  </div>
+</div>
+
+<p><code>{ username }</code> 是 ES2015 的<strong>属性简写</strong>，等价于 <code>{ username: username }</code>。一次打印多个变量也很方便：<code>console.log({ x, y, width, height })</code>。</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 控制台里的对象是「活的」</div>
+  <p>
+    <code>console.log(obj)</code> 记录的是对象的<strong>引用</strong>。你在控制台里点开它时，显示的是<strong>点开那一刻</strong>的内容，而不是打印那一刻的：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const user = { name: 'Ava' };
+console.log(user);        // 折叠状态显示 {name: 'Ava'}
+user.name = 'Bob';        // 之后再展开，看到的却是 name: "Bob"！
+
+// 需要「快照」时，先复制一份
+console.log(structuredClone(user));
+console.log(JSON.parse(JSON.stringify(user)));
+</script>
+  </div>
+</div>
+
+<h2 id="r16-9"><span class="rn">16.9</span>打印调用栈</h2>
+
+<p class="prob">你想知道当前这行代码是被谁、经过哪些函数调用到的。</p>
+
+<div class="code" data-lang="js" data-file="16-14-using-console-trace.js">
+<script type="text/plain">
+function foo() {
+  function bar() {
+    console.trace();
+  }
+  bar();
+}
+
+foo();
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="console.trace 输出的调用栈">
+  <rect x="20" y="16" width="360" height="130" rx="8" style="fill:var(--code-bg)"/>
+  <g class="mono" style="font-size:12px">
+    <text x="34" y="40" style="fill:#82c8e8">▼ console.trace</text>
+    <text x="54" y="64" style="fill:var(--code-fg)">bar      @ app.js:3</text>
+    <text x="54" y="86" style="fill:var(--code-fg)">foo      @ app.js:5</text>
+    <text x="54" y="108" style="fill:var(--code-fg)">(匿名)   @ app.js:8</text>
+  </g>
+  <rect class="bx-a" x="440" y="16" width="120" height="30" rx="6"/><text class="mono on-a" x="500" y="36" text-anchor="middle">bar()</text>
+  <rect class="bx-b" x="440" y="52" width="120" height="30" rx="6"/><text class="mono on-b" x="500" y="72" text-anchor="middle">foo()</text>
+  <rect class="bx" x="440" y="88" width="120" height="30" rx="6"/><text class="mono" x="500" y="108" text-anchor="middle">顶层脚本</text>
+  <text class="sm" x="580" y="36">← 栈顶：正在执行</text>
+  <text class="sm" x="580" y="72">← 调用了 bar</text>
+  <text class="sm" x="580" y="108">← 调用了 foo</text>
+  <text class="sm" x="380" y="164" text-anchor="middle">从上往下读：「谁调用了我」。点击右侧的文件名和行号可以直接跳转到源码</text>
+</svg>
+<figcaption>图 16-5　调用栈：从当前位置一路回溯到起点</figcaption>
+</figure>
+
+<h2 id="r16-10"><span class="rn">16.10</span>断言期望值</h2>
+
+<p class="prob">调试时想确认某个表达式符合预期，不符合就在控制台报错。</p>
+
+<div class="code" data-lang="js" data-file="16-15-using-assert.js（已修正判断条件）">
+<script type="text/plain">
+function updateUser(user) {
+  // user.id 为空时打印错误。
+  // 原书写的是 user.id !== null：如果 user 根本没有 id 属性，user.id 是 undefined，
+  // undefined !== null 为 true，断言反而通过了！用 != null 可以同时排除 null 和 undefined
+  console.assert(user.id != null, 'user.id must not be null');
+
+  return fetch(`/api/users/${user.id}`, {
+    method: 'PUT',
+    body: JSON.stringify(user),
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; assert 不会中断执行</div>
+  <p>
+    断言失败时只是<strong>打印</strong>一条错误，不会抛出异常，函数照常往下执行 —— 上例仍然会发出 <code>PUT /api/users/undefined</code> 请求。
+    真正需要阻止执行的校验，请用 <code>if</code> + <code>throw</code>。
+  </p>
+</div>
+
+<h2 id="r16-11"><span class="rn">16.11</span>查看对象的所有属性</h2>
+
+<p class="prob">你想深入查看一个对象的全部属性，包括嵌套属性和原型链。</p>
+
+<div class="code" data-lang="js" data-file="16-16-using-console-dir.js">
+<script type="text/plain">
+console.dir(console);
+</script>
+</div>
+
+<p>
+  <code>console.dir</code> 总是以可展开的树形结构显示对象，每个属性和方法都能展开，原型链（<code>[[Prototype]]</code>）也能一路展开查看。
+  它和 <code>console.log</code> 的区别在 <strong>DOM 元素</strong>上最明显：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+console.log(document.body);   // 显示为 HTML 标签树：<body>…</body>
+console.dir(document.body);   // 显示为 JS 对象：body {className: '', id: '', …} 可以看到所有属性
+</script>
+</div>
+
+<h2 id="devtools">现代补充：控制台之外的调试技巧</h2>
+
+<div class="tw">
+<table>
+  <tr><th>技巧</th><th>说明</th></tr>
+  <tr><td><strong>日志断点（Logpoint）</strong></td><td>在「源代码」面板行号上右键 →「添加日志点」。不用改代码、不用刷新就能插入 <code>console.log</code>，调试完删掉也不会污染代码</td></tr>
+  <tr><td><code>debugger;</code></td><td>代码执行到这里时，如果开发者工具开着，会自动暂停，进入单步调试</td></tr>
+  <tr><td><code>$0</code></td><td>控制台里代表「元素」面板中当前选中的元素；<code>$1</code> 是上一次选中的</td></tr>
+  <tr><td><code>$_</code></td><td>上一个表达式的结果</td></tr>
+  <tr><td><code>copy(obj)</code></td><td>把对象（序列化为 JSON）复制到剪贴板</td></tr>
+  <tr><td><code>monitorEvents($0, 'click')</code></td><td>打印元素上发生的指定事件（Chrome）</td></tr>
+  <tr><td>实时表达式（Live Expression）</td><td>控制台顶部的「眼睛」图标，持续显示一个表达式的最新值</td></tr>
+</table>
+</div>
+
+<p>以上带 <code>$</code> 的变量和 <code>copy()</code> 等是开发者工具提供的<strong>命令行 API</strong>，只能在控制台里手动输入使用，不能写在网页代码中。</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 上线前清理 console</div>
+  <p>
+    大量 <code>console.log</code> 留在生产环境中，既泄露内部信息，也有轻微的性能开销（被打印的对象无法被垃圾回收）。
+    常见做法是在构建时自动移除，比如 esbuild / Vite 的 <code>drop: ['console', 'debugger']</code>，或 Terser 的 <code>drop_console</code> 选项；
+    也可以只保留 <code>warn</code> 和 <code>error</code>。
+  </p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li><code>%c</code> 添加样式；<code>info / warn / error / debug</code> 区分级别，控制台可按级别过滤。</li>
+  <li><code>console.log.bind(console, 前缀…)</code> 生成带前缀的日志函数，并保留正确的源码位置。</li>
+  <li><code>table</code> 看数组和对象，<code>group / groupCollapsed / groupEnd</code> 组织层级，<code>time / timeLog / timeEnd</code> 计时，<code>count</code> 计数。</li>
+  <li><code>console.log({ 变量 })</code> 同时打印名字和值；注意对象是活引用，需要快照时先复制。</li>
+  <li><code>trace</code> 打印调用栈；<code>assert</code> 失败只打印不中断；<code>dir</code> 以对象形式查看。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>扩展 16.3 节的 <code>createLogger</code>：返回一个带 <code>log / warn / error</code> 三个方法的对象，并且可以通过 <code>localStorage.debug = 'data,renderer'</code> 控制哪些模块的日志被打印。</li>
+    <li>写一个递归的斐波那契函数，用 <code>console.count</code> 统计 <code>fib(20)</code> 一共调用了多少次，再改成带缓存的版本对比次数。</li>
+    <li>用 <code>console.group</code> 打印一棵嵌套的菜单树（每一层一个分组）。</li>
+    <li>在开发者工具中给本页的某一行代码加一个日志点，然后点击演示按钮观察输出。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function fmt(args) {
+    args = Array.prototype.slice.call(args);
+    var out = '';
+    if (typeof args[0] === 'string' && args[0].indexOf('%c') !== -1) {
+      var parts = args.shift().split('%c');
+      out += esc(parts[0]);
+      for (var i = 1; i < parts.length; i++) out += '<span style="' + esc(args.shift() || '') + '">' + esc(parts[i]) + '</span>';
+    }
+    return out + args.map(function (a) { return ' ' + esc(typeof a === 'object' ? JSON.stringify(a) : a); }).join('');
+  }
+  function mc(id) {
+    var el = document.getElementById(id), depth = 0;
+    function line(cls, html) { var d = document.createElement('div'); d.className = 'ln ' + cls; d.style.paddingLeft = (10 + depth * 18) + 'px'; d.innerHTML = html; el.appendChild(d); }
+    return {
+      clear: function () { el.innerHTML = ''; depth = 0; },
+      log: function () { console.log.apply(console, arguments); line('', fmt(arguments)); },
+      info: function () { console.info.apply(console, arguments); line('info', 'ℹ ' + fmt(arguments)); },
+      warn: function () { console.warn.apply(console, arguments); line('warn', '⚠ ' + fmt(arguments)); },
+      error: function () { console.error.apply(console, arguments); line('error', '✖ ' + fmt(arguments)); },
+      group: function (l) { console.group(l); line('group', '▼ ' + esc(l)); depth++; },
+      groupEnd: function () { console.groupEnd(); depth = Math.max(0, depth - 1); },
+      table: function (data, cols) {
+        console.table(data, cols);
+        var keys = Object.keys(data), rows = keys.map(function (k) { return [k, data[k]]; });
+        var colset = cols || Array.from(new Set([].concat.apply([], rows.map(function (r) { return typeof r[1] === 'object' ? Object.keys(r[1]) : ['Value']; }))));
+        var h = '<table><tr><th>(index)</th>' + colset.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr>';
+        rows.forEach(function (r) {
+          h += '<tr><td>' + esc(r[0]) + '</td>' + colset.map(function (c) {
+            var v = typeof r[1] === 'object' ? r[1][c] : (c === 'Value' ? r[1] : '');
+            return '<td>' + esc(v === undefined ? '' : JSON.stringify(v)) + '</td>';
+          }).join('') + '</tr>';
+        });
+        line('', h + '</table>');
+      }
+    };
+  }
+  var users = [
+    { firstName: 'John', lastName: 'Smith', department: 'Sales' },
+    { firstName: 'Emily', lastName: 'Johnson', department: 'Marketing' },
+    { firstName: 'Michael', lastName: 'Davis', department: 'Human Resources' },
+    { firstName: 'Sarah', lastName: 'Thompson', department: 'Finance' },
+    { firstName: 'David', lastName: 'Wilson', department: 'Engineering' }
+  ];
+
+  var s = mc('mc-style');
+  document.getElementById('b-style').onclick = function () {
+    s.clear();
+    s.log('%cHello world!', 'font-size: 2rem; color: red;');
+    s.log('This console message uses %cstyled text. %cCool!', 'font-style: italic;', 'font-weight: bold;');
+  };
+  var l = mc('mc-levels');
+  document.getElementById('b-levels').onclick = function () {
+    l.clear(); l.info('This is an info message'); l.warn('This is a warning message'); l.error('This is an error message');
+  };
+  var n = mc('mc-named');
+  document.getElementById('b-named').onclick = function () {
+    n.clear();
+    function createLogger(name, color) { return n.log.bind(null, '%c' + name, 'color: ' + color + '; font-weight: bold;'); }
+    var rendererLogger = createLogger('renderer', '#7fb0e8'), dataLogger = createLogger('data', '#6ac48d');
+    rendererLogger('Rendering component'); dataLogger('Fetching data'); rendererLogger('Done in', 12, 'ms');
+  };
+  var t = mc('mc-table');
+  document.getElementById('b-table').onclick = function () { t.clear(); t.table(users); };
+  document.getElementById('b-table2').onclick = function () { t.clear(); t.table(users, ['firstName', 'lastName']); };
+  document.getElementById('b-table3').onclick = function () { t.clear(); t.table({ name: 'sysadmin', email: 'admin@example.com' }); };
+  var g = mc('mc-group');
+  document.getElementById('b-group').onclick = function () {
+    g.clear();
+    g.log('Updating user data');
+    users.slice(0, 3).forEach(function (u) {
+      g.group('User: ' + u.firstName + ' ' + u.lastName);
+      g.log('Loading employee data from API');
+      g.group('Validation');
+      g.log('department = ' + u.department);
+      g.groupEnd();
+      g.log('Saving user data');
+      g.groupEnd();
+    });
+  };
+})();
+</script>
+</body>
+</html>

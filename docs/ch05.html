@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 5 章 · IndexedDB — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="5">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 5 章</span>
+<h1>IndexedDB：浏览器里的数据库</h1>
+<p class="lede">
+  localStorage 只能存字符串、容量小、查询靠遍历。当你需要离线保存成百上千条记录、按条件检索、存图片和文件时，
+  就该请出 IndexedDB 了。它的 API 以繁琐著称，但只要理解了「数据库 → 事务 → 对象仓库 → 请求」这条链，一切都有章可循。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解对象仓库、键、索引、事务、请求这五个核心概念</li>
+    <li>完成增、查、删的基本操作，并用版本号安全地升级数据库结构</li>
+    <li>用索引和键范围（<code>IDBKeyRange</code>）高效查询</li>
+    <li>用游标遍历、搜索和分页</li>
+    <li>把回调式 API 包装成 Promise，并避开「事务自动提交」这个经典陷阱</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">核心概念</h2>
+
+<p>
+  如果你用过 MySQL 之类的关系数据库，可以这样类比：<strong>数据库</strong>对应数据库，<strong>对象仓库</strong>（object store）对应表，
+  每条<strong>记录</strong>是一个 JavaScript 对象，<strong>键</strong>对应主键，<strong>索引</strong>对应索引。
+  不同之处在于：IndexedDB 没有 SQL，也没有固定的列 —— 同一个仓库里的对象可以长得不一样。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="IndexedDB 的层次结构：源、数据库、对象仓库、记录与索引">
+  <rect class="bx-d" x="10" y="10" width="740" height="280" rx="12"/>
+  <text class="sm" x="26" y="32">源 https://example.com（每个源可以有多个数据库）</text>
+
+  <rect class="bx-a" x="30" y="44" width="700" height="230" rx="10"/>
+  <text class="ttl on-a" x="46" y="68">数据库 employees · 版本 2</text>
+
+  <rect class="bx" x="50" y="84" width="420" height="174" rx="8"/>
+  <text class="ttl" x="66" y="106">对象仓库 employees</text>
+  <text class="sm" x="66" y="124">keyPath: 'id'，autoIncrement: true</text>
+  <text class="mono on-b" x="70" y="152">键</text><text class="mono" x="130" y="152">值（任意可克隆对象）</text>
+  <path class="ln" d="M66 160 H454"/>
+  <text class="mono on-b" x="74" y="182">1</text><text class="mono" x="130" y="182">{ id: 1, name: '张三', department: '研发' }</text>
+  <text class="mono on-b" x="74" y="204">2</text><text class="mono" x="130" y="204">{ id: 2, name: '李四', department: '市场' }</text>
+  <text class="mono on-b" x="74" y="226">3</text><text class="mono" x="130" y="226">{ id: 3, name: '王五', department: '研发' }</text>
+  <text class="sm" x="130" y="248">记录按键排序存放</text>
+
+  <rect class="bx-g" x="500" y="84" width="210" height="174" rx="8"/>
+  <text class="ttl on-g" x="516" y="106">索引 department</text>
+  <text class="sm" x="516" y="124">按 department 排序的「目录」</text>
+  <text class="mono" x="520" y="152">索引键   →  主键</text>
+  <path class="ln" d="M516 160 H694"/>
+  <text class="mono" x="520" y="182">'市场'   →  2</text>
+  <text class="mono" x="520" y="204">'研发'   →  1</text>
+  <text class="mono" x="520" y="226">'研发'   →  3</text>
+  <path class="ln-g" d="M498 204 H474" marker-end="url(#ar-g)"/>
+</svg>
+<figcaption>图 5-1　数据库 → 对象仓库 → 记录；索引是一张按某个属性排好序的「目录」</figcaption>
+</figure>
+
+<h3>键：内联还是外置</h3>
+
+<div class="vs">
+  <div class="new"><div class="h">内联键（in-line）：键就是对象的一个属性</div>
+    <div class="code" data-lang="js">
+<script type="text/plain">
+// 创建仓库时用 keyPath 指定哪个属性是键
+db.createObjectStore('todos', { keyPath: 'id' });
+
+// 不想自己维护唯一 id？加 autoIncrement
+db.createObjectStore('todos', { keyPath: 'id', autoIncrement: true });
+
+store.add({ id: 100, name: '倒垃圾', completed: false });
+</script>
+    </div>
+  </div>
+  <div class="old"><div class="h">外置键（out-of-line）：键单独传</div>
+    <div class="code" data-lang="js">
+<script type="text/plain">
+db.createObjectStore('todos');   // 不指定 keyPath
+
+const todo = { name: '倒垃圾', completed: false };
+// 键作为第二个参数，不存在对象里
+store.add(todo, 100);
+</script>
+    </div>
+  </div>
+</div>
+
+<h3>事务与请求</h3>
+
+<p>
+  IndexedDB 的<strong>所有读写都必须在事务里进行</strong>。事务把一组操作捆在一起：要么全部成功，要么任何一个失败就全部回滚，
+  这样数据不会停在「改了一半」的状态。事务分两种：<code>readonly</code>（只读，可以多个并行）和 <code>readwrite</code>（读写，同一仓库上会排队）。
+</p>
+
+<p>每一次操作都遵循同样的四步：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="IndexedDB 一次操作的四个步骤">
+  <rect class="bx-a" x="20" y="30" width="150" height="60" rx="8"/>
+  <text class="mono on-a" x="95" y="55" text-anchor="middle">db.transaction(</text>
+  <text class="mono on-a" x="95" y="74" text-anchor="middle">['contacts'], 'readonly')</text>
+  <path class="ln" d="M172 60 H206" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="210" y="30" width="150" height="60" rx="8"/>
+  <text class="mono on-b" x="285" y="55" text-anchor="middle">.objectStore(</text>
+  <text class="mono on-b" x="285" y="74" text-anchor="middle">'contacts')</text>
+  <path class="ln" d="M362 60 H396" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="400" y="30" width="150" height="60" rx="8"/>
+  <text class="mono on-p" x="475" y="55" text-anchor="middle">.getAll()</text>
+  <text class="sm" x="475" y="74" text-anchor="middle">返回 IDBRequest</text>
+  <path class="ln" d="M552 50 H600" marker-end="url(#ar)"/>
+  <path class="ln" d="M552 70 H600" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="604" y="18" width="136" height="40" rx="8"/>
+  <text class="mono on-g" x="672" y="36" text-anchor="middle">success 事件</text>
+  <text class="sm" x="672" y="51" text-anchor="middle">request.result</text>
+  <rect class="bx-r" x="604" y="64" width="136" height="40" rx="8"/>
+  <text class="mono on-r" x="672" y="82" text-anchor="middle">error 事件</text>
+  <text class="sm" x="672" y="97" text-anchor="middle">request.error</text>
+  <text class="sm" x="95" y="116" text-anchor="middle">① 开事务，声明范围和模式</text>
+  <text class="sm" x="285" y="116" text-anchor="middle">② 拿到对象仓库</text>
+  <text class="sm" x="475" y="116" text-anchor="middle">③ 发起操作（异步）</text>
+  <text class="sm" x="672" y="126" text-anchor="middle">④ 在事件里拿结果</text>
+  <text class="sm" x="380" y="156" text-anchor="middle">常用操作：add（新增，键重复报错）· put（新增或覆盖）· get · getAll · delete · clear · count · openCursor</text>
+</svg>
+<figcaption>图 5-2　一次 IndexedDB 操作的组成部分</figcaption>
+</figure>
+
+<h2 id="r5-1"><span class="rn">5.1</span>创建、读取和删除对象</h2>
+
+<p class="prob">你想建一个简单的通讯录数据库，支持添加、读取和删除联系人。</p>
+
+<h3>打开数据库</h3>
+
+<p>
+  调用 <code>indexedDB.open(名称)</code>。如果数据库还不存在（或版本需要升级），先触发 <code>upgradeneeded</code> 事件 ——
+  <strong>这是唯一允许创建或修改对象仓库和索引的地方</strong>。随后触发 <code>success</code>，数据库就可以用了。
+</p>
+
+<div class="code" data-lang="js" data-file="5-01-open-db.js">
+<script type="text/plain">
+/**
+ * 打开数据库，必要时创建对象仓库。
+ * 因为是异步的，所以接收一个回调 onSuccess，数据库就绪后以 db 对象调用它。
+ */
+function openDatabase(onSuccess) {
+  const request = indexedDB.open('contacts');
+
+  // 需要时创建对象仓库
+  request.addEventListener('upgradeneeded', () => {
+    const db = request.result;
+
+    // 联系人对象以 id 为键。autoIncrement 表示添加时不必自己设 id，
+    // 数据库会自动生成 1、2、3……
+    db.createObjectStore('contacts', {
+      keyPath: 'id',
+      autoIncrement: true
+    });
+  });
+
+  // 数据库就绪
+  request.addEventListener('success', () => {
+    const db = request.result;
+    onSuccess(db);
+  });
+
+  // 永远记得处理错误！
+  request.addEventListener('error', () => {
+    console.error('Error opening database:', request.error);
+  });
+}
+</script>
+</div>
+
+<h3>读取全部</h3>
+
+<div class="code" data-lang="js" data-file="5-02-read.js">
+<script type="text/plain">
+function getContacts(contactsDb, onSuccess) {
+  const request = contactsDb
+    .transaction(['contacts'], 'readonly')
+    .objectStore('contacts')
+    .getAll();
+
+  // 数据加载完成后，request 上触发 success 事件
+  request.addEventListener('success', () => {
+    console.log('Got contacts:', request.result);
+    onSuccess(request.result);
+  });
+
+  request.addEventListener('error', () => {
+    console.error('Error loading contacts:', request.error);
+  });
+}
+</script>
+</div>
+
+<h3>添加与删除</h3>
+
+<div class="code" data-lang="js" data-file="5-03-add.js">
+<script type="text/plain">
+function addContact(contactsDb, contact, onSuccess) {
+  const request = contactsDb
+    .transaction(['contacts'], 'readwrite')   // 写操作需要 readwrite
+    .objectStore('contacts')
+    .add(contact);
+
+  request.addEventListener('success', () => {
+    console.log('Added new contact:', contact);
+    onSuccess();
+  });
+
+  request.addEventListener('error', () => {
+    console.error('Error adding contact:', request.error);
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="5-04-delete.js">
+<script type="text/plain">
+function deleteContact(contactsDb, contact, onSuccess) {
+  const request = contactsDb
+    .transaction(['contacts'], 'readwrite')
+    .objectStore('contacts')
+    .delete(contact.id);        // 按键删除
+
+  request.addEventListener('success', () => {
+    console.log('Deleted contact:', contact);
+    onSuccess();
+  });
+
+  request.addEventListener('error', () => {
+    console.error('Error deleting contact:', request.error);
+  });
+}
+</script>
+</div>
+
+<h3>把它们串起来</h3>
+
+<p>因为每个操作都是异步的，下一步必须写在上一步的回调里：</p>
+
+<div class="code" data-lang="js" data-file="5-05 ~ 5-07">
+<script type="text/plain">
+let contactsDb;
+
+// 打开数据库，保存引用，然后首次渲染
+openDatabase(db => {
+  contactsDb = db;
+  getContacts(contactsDb, contacts => renderContacts(contacts));
+});
+
+// 添加联系人：等添加完成，再重新读取并渲染
+const newContact = { name: 'Connie Myers', email: 'cmyers@example.com' };
+addContact(contactsDb, newContact, () => {
+  getContacts(contactsDb, contacts => {
+    renderContacts(contacts);
+  });
+});
+</script>
+</div>
+
+<p>不想到处传 <code>db</code>？可以把数据库引用和操作封装进一个对象：</p>
+
+<div class="code" data-lang="js" data-file="5-08-encapsulation.js">
+<script type="text/plain">
+const contactsDb = {
+  open(onSuccess) {
+    const request = indexedDB.open('contacts');
+
+    request.addEventListener('upgradeneeded', () => {
+      const db = request.result;
+      db.createObjectStore('contacts', { keyPath: 'id', autoIncrement: true });
+    });
+
+    request.addEventListener('success', () => {
+      this.db = request.result;   // 保存在对象自身上，避免全局变量
+      onSuccess();
+    });
+  },
+
+  getContacts(onSuccess) {
+    const request = this.db
+      .transaction(['contacts'], 'readonly')
+      .objectStore('contacts')
+      .getAll();
+
+    request.addEventListener('success', () => {
+      onSuccess(request.result);
+    });
+  },
+
+  // 其他操作同理……
+};
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：一个真实的 IndexedDB 通讯录</div>
+  <div class="b">
+    <div class="row">
+      <input id="c-name" placeholder="姓名" style="width:120px">
+      <select id="c-dept"><option>研发</option><option>市场</option><option>设计</option></select>
+      <button id="c-add">add()</button>
+      <button id="c-seed">批量插入 20 条</button>
+      <button id="c-clear">clear()</button>
+    </div>
+    <div class="row">
+      <span class="hint">按索引查询：</span>
+      <button data-dept="研发">index('department').getAll('研发')</button>
+      <button data-dept="">getAll()</button>
+    </div>
+    <div class="out" id="c-out"></div>
+    <p class="hint">数据库名 <code>webapi-tutorial-contacts</code>。刷新页面数据仍在；打开开发者工具 → Application（应用）→ IndexedDB 可以直接查看。</p>
+  </div>
+</div>
+
+<h2 id="r5-2"><span class="rn">5.2</span>升级已有的数据库</h2>
+
+<p class="prob">应用更新了，需要给已有的数据库再加一个对象仓库。</p>
+
+<p>
+  这是 IndexedDB 最独特的设计。你的数据库活在<strong>每个用户的浏览器里</strong>：有人三个月前访问过，数据库还是第 1 版；
+  有人从没来过，一个都没有。你无法「统一迁移」，只能在代码里写好<strong>从任意旧版本升级到最新版本</strong>的步骤。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="不同用户从不同的旧版本升级到版本 2">
+  <text class="ttl" x="20" y="24">indexedDB.open('todoList', 2)</text>
+  <rect class="bx" x="20" y="44" width="150" height="44" rx="8"/><text class="lbl" x="95" y="64" text-anchor="middle">新用户</text><text class="sm" x="95" y="80" text-anchor="middle">oldVersion = 0</text>
+  <rect class="bx" x="20" y="104" width="150" height="44" rx="8"/><text class="lbl" x="95" y="124" text-anchor="middle">老用户</text><text class="sm" x="95" y="140" text-anchor="middle">oldVersion = 1</text>
+  <rect class="bx" x="20" y="164" width="150" height="44" rx="8"/><text class="lbl" x="95" y="184" text-anchor="middle">已是最新</text><text class="sm" x="95" y="200" text-anchor="middle">oldVersion = 2</text>
+
+  <rect class="bx-b" x="250" y="44" width="200" height="44" rx="8"/><text class="mono on-b" x="350" y="64" text-anchor="middle">if (old &lt; 1)</text><text class="sm" x="350" y="80" text-anchor="middle">创建 todos</text>
+  <rect class="bx-p" x="500" y="44" width="200" height="44" rx="8"/><text class="mono on-p" x="600" y="64" text-anchor="middle">if (old &lt; 2)</text><text class="sm" x="600" y="80" text-anchor="middle">创建 people</text>
+
+  <path class="ln-b" d="M172 66 H246" marker-end="url(#ar-b)"/>
+  <path class="ln-p" d="M452 66 H496" marker-end="url(#ar-p)"/>
+  <path class="ln-p" d="M172 126 H400 C 460 126, 470 100, 520 92" marker-end="url(#ar-p)"/>
+  <text class="sm on-p" x="300" y="120">跳过第一步</text>
+  <path class="ln-g" d="M172 186 H500"/>
+  <text class="sm on-g" x="336" y="180" text-anchor="middle">不触发 upgradeneeded，直接 success</text>
+  <rect class="bx-g" x="720" y="44" width="30" height="164" rx="6"/>
+  <text class="sm on-g" x="735" y="130" text-anchor="middle" transform="rotate(90 735 130)">版本 2</text>
+  <path class="ln-p" d="M702 66 H716" marker-end="url(#ar-p)"/>
+  <path class="ln-g" d="M500 186 H716" marker-end="url(#ar-g)"/>
+  <text class="sm" x="380" y="232" text-anchor="middle">每个 if 都用 &lt;（而不是 ===），这样任何旧版本都能一步步「补课」到最新</text>
+</svg>
+<figcaption>图 5-3　版本迁移像楼梯：从用户所在的台阶开始往上走</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="5-09-upgrade-db.js">
+<script type="text/plain">
+// todoList 数据库现在是第 2 版
+const request = indexedDB.open('todoList', 2);
+
+// 用户的数据库还是第 1 版（或根本不存在）时触发
+request.addEventListener('upgradeneeded', event => {
+  const db = request.result;
+
+  // 数据库全新创建时 oldVersion 为 0，也要走这里创建 todos
+  if (event.oldVersion < 1) {
+    db.createObjectStore('todos', { keyPath: 'id' });
+  }
+
+  // 还没升级到第 2 版的，补建 people
+  if (event.oldVersion < 2) {
+    db.createObjectStore('people', { keyPath: 'id' });
+  }
+});
+
+request.addEventListener('success', () => {
+  // 数据库准备就绪
+});
+
+request.addEventListener('error', () => {
+  console.error('Error opening database:', request.error);
+});
+</script>
+</div>
+
+<ul>
+  <li><code>open</code> 不传版本号时默认为 1（如果库已存在，则按现有版本打开）。</li>
+  <li>版本号只能<strong>增大</strong>。用比现有版本小的数字打开会报 <code>VersionError</code>。</li>
+  <li>重复创建已存在的仓库或索引会抛异常，所以一定要根据 <code>oldVersion</code> 判断。</li>
+</ul>
+
+<div class="box warn">
+  <div class="t">&#9888; 多标签页下的升级阻塞</div>
+  <p>
+    用户在标签页 A 开着旧版本页面，又在标签页 B 打开了新版本，B 的升级会被 A 的连接<strong>阻塞</strong>（触发 <code>blocked</code> 事件）。
+    好习惯是在每个连接上监听 <code>versionchange</code>，主动关闭旧连接并提示用户刷新：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+db.addEventListener('versionchange', () => {
+  db.close();
+  alert('页面有新版本，请刷新。');
+});
+</script>
+  </div>
+</div>
+
+<h2 id="r5-3"><span class="rn">5.3</span>用索引查询</h2>
+
+<p class="prob">你想按主键以外的属性（比如部门）高效查询数据。</p>
+
+<p>在 <code>upgradeneeded</code> 里创建仓库时，顺便用 <code>createIndex(索引名, 属性路径)</code> 建索引：</p>
+
+<div class="code" data-lang="js" data-file="5-10-create-index.js">
+<script type="text/plain">
+function openDatabase(onSuccess) {
+  const request = indexedDB.open('employees');
+
+  request.addEventListener('upgradeneeded', () => {
+    const db = request.result;
+
+    const employeesStore = db.createObjectStore('employees', {
+      keyPath: 'id',
+      autoIncrement: true,
+    });
+
+    // 在 department 属性上建一个名为 department 的索引
+    employeesStore.createIndex('department', 'department');
+  });
+
+  request.addEventListener('success', () => {
+    onSuccess(request.result);
+  });
+}
+</script>
+</div>
+
+<p>查询时先 <code>.index(索引名)</code>，接下来的用法和对象仓库一样：</p>
+
+<div class="code" data-lang="js" data-file="5-11-query-index.js">
+<script type="text/plain">
+function getEmployees(department, onSuccess) {
+  const request = employeeDb
+    .transaction(['employees'], 'readonly')
+    .objectStore('employees')
+    .index('department')
+    .getAll(department);     // 所有 department === 参数 的员工
+
+  request.addEventListener('success', () => {
+    console.log('Got employees:', request.result);
+    onSuccess(request.result);
+  });
+
+  request.addEventListener('error', () => {
+    console.log('Error loading employees:', request.error);
+  });
+}
+</script>
+</div>
+
+<h3>用键范围查询一段数据</h3>
+
+<p>
+  <code>getAll</code> 等方法除了接受一个具体的值，还接受一个 <code>IDBKeyRange</code> 对象，表示「一段范围」。
+  比如在 <code>price</code> 索引上查询价格在 10 到 50 之间的商品：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 260" role="img" aria-label="四种 IDBKeyRange 在数轴上的表示">
+  <path class="ln" d="M250 30 H610" marker-end="url(#ar)"/>
+  <text class="sm" x="330" y="22" text-anchor="middle">10</text>
+  <text class="sm" x="510" y="22" text-anchor="middle">50</text>
+  <path class="ln-d" d="M330 34 V252 M510 34 V252"/>
+
+  <text class="mono" x="20" y="84">lowerBound(10)</text>
+  <path class="ln-g" d="M330 80 H600" style="stroke-width:6"/>
+  <circle cx="330" cy="80" r="6" style="fill:var(--green)"/>
+  <text class="sm on-g" x="624" y="84">x ≥ 10</text>
+
+  <text class="mono" x="20" y="126">upperBound(50, true)</text>
+  <path class="ln-b" d="M250 122 H510" style="stroke-width:6"/>
+  <circle cx="510" cy="122" r="6" style="fill:var(--panel);stroke:var(--blue);stroke-width:2"/>
+  <text class="sm on-b" x="624" y="126">x &lt; 50</text>
+
+  <text class="mono" x="20" y="168">bound(10, 50)</text>
+  <path class="ln-a" d="M330 164 H510" style="stroke-width:6"/>
+  <circle cx="330" cy="164" r="6" style="fill:var(--accent)"/>
+  <circle cx="510" cy="164" r="6" style="fill:var(--accent)"/>
+  <text class="sm on-a" x="624" y="168">10 ≤ x ≤ 50</text>
+
+  <text class="mono" x="20" y="210">bound(10, 50, true, false)</text>
+  <path class="ln-p" d="M330 206 H510" style="stroke-width:6"/>
+  <circle cx="330" cy="206" r="6" style="fill:var(--panel);stroke:var(--purple);stroke-width:2"/>
+  <circle cx="510" cy="206" r="6" style="fill:var(--purple)"/>
+  <text class="sm on-p" x="624" y="210">10 &lt; x ≤ 50</text>
+
+  <text class="mono" x="20" y="246">only(50)</text>
+  <circle cx="510" cy="242" r="6" style="fill:var(--red)"/>
+  <text class="sm on-r" x="624" y="246">x = 50</text>
+</svg>
+<figcaption>图 5-4　实心点 = 包含端点（闭区间），空心点 = 不包含（开区间，对应参数 true）</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const priceIndex = db.transaction('products').objectStore('products').index('price');
+
+priceIndex.getAll(IDBKeyRange.bound(10, 50));          // 10 ≤ price ≤ 50
+priceIndex.getAll(IDBKeyRange.upperBound(10, true));   // price < 10
+priceIndex.getAll(IDBKeyRange.lowerBound(100), 5);     // price ≥ 100，最多 5 条
+
+// 范围不限于数字：字符串、Date、数组都可以作为键
+// 字符串「前缀匹配」的经典技巧：'￿' 是一个极大的字符
+nameIndex.getAll(IDBKeyRange.bound('张', '张￿'));   // 所有姓张的
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 索引的几个进阶选项</div>
+  <ul>
+    <li><code>createIndex('email', 'email', { unique: true })</code>：唯一索引，插入重复 email 会失败。</li>
+    <li><code>createIndex('tags', 'tags', { multiEntry: true })</code>：属性是数组时，每个元素都进索引，可以按标签查询。</li>
+    <li><code>createIndex('dept_age', ['department', 'age'])</code>：复合索引，配合 <code>bound(['研发', 20], ['研发', 30])</code> 查「研发部 20–30 岁」。</li>
+  </ul>
+</div>
+
+<h2 id="r5-4"><span class="rn">5.4</span>用游标搜索字符串</h2>
+
+<p class="prob">你想找出名字<strong>包含</strong>某段文字的所有员工 —— 索引只能做精确或范围匹配，做不了「包含」。</p>
+
+<p>
+  <strong>游标</strong>（cursor）像一根手指，按键的顺序一条一条指过去。每指到一条记录，就触发一次 <code>success</code>；
+  你检查完当前记录后调用 <code>continue()</code>，手指移到下一条；走到头时 <code>request.result</code> 为 <code>null</code>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="游标逐条移动，每次触发一次 success 事件">
+  <rect class="bx" x="20" y="60" width="120" height="44" rx="6"/><text class="sm" x="80" y="86" text-anchor="middle">张三</text>
+  <rect class="bx-g" x="150" y="60" width="120" height="44" rx="6"/><text class="sm on-g" x="210" y="86" text-anchor="middle">张小明 ✓</text>
+  <rect class="bx" x="280" y="60" width="120" height="44" rx="6"/><text class="sm" x="340" y="86" text-anchor="middle">李四</text>
+  <rect class="bx-g" x="410" y="60" width="120" height="44" rx="6"/><text class="sm on-g" x="470" y="86" text-anchor="middle">王小明 ✓</text>
+  <rect class="bx-d" x="540" y="60" width="120" height="44" rx="6"/><text class="sm" x="600" y="86" text-anchor="middle">（结束）</text>
+
+  <text class="sm on-a" x="80" y="40" text-anchor="middle">success #1</text>
+  <text class="sm on-a" x="210" y="40" text-anchor="middle">success #2</text>
+  <text class="sm on-a" x="340" y="40" text-anchor="middle">success #3</text>
+  <text class="sm on-a" x="470" y="40" text-anchor="middle">success #4</text>
+  <text class="sm on-a" x="600" y="40" text-anchor="middle">result = null</text>
+
+  <path class="ln-a" d="M80 108 C 110 140, 180 140, 206 110" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M210 108 C 240 140, 310 140, 336 110" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M340 108 C 370 140, 440 140, 466 110" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M470 108 C 500 140, 570 140, 596 110" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="340" y="160" text-anchor="middle">cursor.continue()</text>
+  <text class="sm" x="690" y="86">搜「小明」</text>
+</svg>
+<figcaption>图 5-5　游标一步一个脚印：检查 → continue → 再次 success</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="5-12-using-cursor.js">
+<script type="text/plain">
+/**
+ * 按姓名搜索员工
+ * @param name 查询字符串
+ * @param onSuccess 接收匹配员工数组的回调
+ */
+function searchEmployees(name, onSuccess) {
+  const results = [];
+  const query = name.toLowerCase();
+
+  const request = employeeDb
+    .transaction(['employees'], 'readonly')
+    .objectStore('employees')
+    .openCursor();
+
+  // 游标每指到一个对象，就触发一次 success
+  request.addEventListener('success', () => {
+    const cursor = request.result;
+    if (cursor) {
+      const name = `${cursor.value.firstName} ${cursor.value.lastName}`.toLowerCase();
+
+      // 转小写后比较，实现不区分大小写的搜索
+      if (name.includes(query)) {
+        results.push(cursor.value);
+      }
+
+      // 移到下一条
+      cursor.continue();
+    } else {
+      // cursor 为 null：遍历结束
+      onSuccess(results);
+    }
+  });
+
+  request.addEventListener('error', () => {
+    console.error('Error searching employees:', request.error);
+  });
+}
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 游标搜索是「全表扫描」</div>
+  <p>
+    这种写法要把每条记录都读一遍，数据量达到几万条时会明显变慢。如果主要是<strong>前缀搜索</strong>（输入「张」找「张三」），
+    用上一节的 <code>bound('张', '张￿')</code> 走索引会快得多。真正的全文搜索，可以考虑专门的客户端搜索库。
+  </p>
+</div>
+
+<h2 id="r5-5"><span class="rn">5.5</span>对大数据集分页</h2>
+
+<p class="prob">你想把一大堆数据按「从第几条开始、取多少条」分页读取。</p>
+
+<p>
+  思路：游标先用 <code>advance(offset)</code> 一次跳过前面 offset 条，然后逐条收集，收够 length 条就停。
+  原书示例有几处笔误（变量名不一致、<code>offset</code> 为 0 时 <code>advance(0)</code> 会抛异常、结果没有返回），下面是修正并改为返回 Promise 的版本：
+</p>
+
+<div class="code" data-lang="js" data-file="5-13-pagination.js（已修正）">
+<script type="text/plain">
+/**
+ * 用游标从对象仓库中取出一「页」数据
+ * @param offset 起始位置（0 表示第一条）
+ * @param length 这一页要取多少条
+ */
+function getPaginatedRecords(db, storeName, offset, length) {
+  return new Promise((resolve, reject) => {
+    const request = db
+      .transaction([storeName], 'readonly')
+      .objectStore(storeName)
+      .openCursor();
+
+    const results = [];
+    // 标记：是否已经跳到了 offset 的位置
+    let skipped = offset === 0;   // offset 为 0 时无需跳过（advance(0) 会抛 TypeError）
+
+    request.addEventListener('success', () => {
+      const cursor = request.result;
+
+      if (!cursor) {
+        // 没有更多记录了
+        resolve(results);
+      } else if (!skipped) {
+        // 第一次：跳过 offset 条。下一次 success 时游标就在起点了
+        skipped = true;
+        cursor.advance(offset);
+      } else {
+        results.push(cursor.value);
+        if (results.length < length) {
+          cursor.continue();
+        } else {
+          resolve(results);   // 收够了
+        }
+      }
+    });
+
+    request.addEventListener('error', () => reject(request.error));
+  });
+}
+</script>
+</div>
+
+<p>分页还有一个<strong>更高效</strong>的做法 —— 游标式分页（keyset pagination）：记住上一页最后一条的键，下一页从它之后开始取。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="偏移分页与游标式分页的对比">
+  <text class="ttl on-r" x="20" y="24">偏移分页：第 100 页</text>
+  <g>
+    <rect class="bx-r" x="20" y="36" width="440" height="30" rx="4" style="opacity:.8"/>
+    <text class="sm on-r" x="240" y="56" text-anchor="middle">advance(990)：前面 990 条每次都要从头数一遍</text>
+    <rect class="bx-g" x="464" y="36" width="80" height="30" rx="4"/>
+    <text class="sm on-g" x="504" y="56" text-anchor="middle">取 10 条</text>
+  </g>
+  <text class="ttl on-g" x="20" y="104">游标式分页：第 100 页</text>
+  <rect class="bx-d" x="20" y="116" width="440" height="30" rx="4"/>
+  <text class="sm" x="240" y="136" text-anchor="middle">不碰前面的数据</text>
+  <rect class="bx-g" x="464" y="116" width="80" height="30" rx="4"/>
+  <text class="sm on-g" x="504" y="136" text-anchor="middle">取 10 条</text>
+  <path class="ln-a" d="M464 160 V150"/>
+  <text class="mono on-a" x="464" y="176" text-anchor="middle">lowerBound(lastKey, true)</text>
+  <text class="sm" x="560" y="136">直接从上一页最后一个键之后开始</text>
+</svg>
+<figcaption>图 5-6　「翻到第 N 页」越往后越慢；「接着上次往下取」速度恒定</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 下一页 = 键大于 lastKey 的前 pageSize 条。getAll 第二个参数就是数量上限
+function getNextPage(store, lastKey, pageSize) {
+  const range = lastKey === undefined ? null : IDBKeyRange.lowerBound(lastKey, true);
+  return store.getAll(range, pageSize);   // 返回 IDBRequest，结果在 success 里
+}
+</script>
+</div>
+
+<h2 id="r5-6"><span class="rn">5.6</span>用 Promise 包装 IndexedDB</h2>
+
+<p class="prob">层层嵌套的回调太难受了，你想用 Promise 和 async/await 操作数据库。</p>
+
+<p>套用第 1 章的 promisify 模式：<code>success</code> 时 resolve，<code>error</code> 时 reject。</p>
+
+<div class="code" data-lang="js" data-file="5-14-promise-open.js">
+<script type="text/plain">
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('contacts-promise');
+
+    request.addEventListener('upgradeneeded', () => {
+      const db = request.result;
+      db.createObjectStore('contacts', { keyPath: 'id', autoIncrement: true });
+    });
+
+    request.addEventListener('success', () => resolve(request.result));
+    request.addEventListener('error', () => reject(request.error));
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="5-15-promise-read.js（改为接收 db 参数）">
+<script type="text/plain">
+function getContacts(contactsDb) {
+  return new Promise((resolve, reject) => {
+    const request = contactsDb
+      .transaction(['contacts'], 'readonly')
+      .objectStore('contacts')
+      .getAll();
+
+    request.addEventListener('success', () => resolve(request.result));
+    request.addEventListener('error', () => reject(request.error));
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="5-16-usage.js">
+<script type="text/plain">
+async function loadAndPrintContacts() {
+  try {
+    const db = await openDatabase();
+    const contacts = await getContacts(db);
+    console.log('Got contacts:', contacts);
+  } catch (error) {
+    console.error('Error:', error);
+  }
+}
+</script>
+</div>
+
+<p>更进一步，可以写一个<strong>通用</strong>的小工具，把任意 <code>IDBRequest</code> 变成 Promise：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+function promisify(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+const store = db.transaction('contacts', 'readwrite').objectStore('contacts');
+const id = await promisify(store.add({ name: 'Ava' }));
+const ava = await promisify(store.get(id));
+</script>
+</div>
+
+<h2 id="pitfall">现代补充：事务自动提交陷阱</h2>
+
+<p>
+  这是 IndexedDB 和 Promise 混用时最常见的 bug。IndexedDB 的事务<strong>没有 commit 按钮</strong>：
+  当事务里已经没有待完成的请求，并且控制权回到事件循环时，浏览器就会<strong>自动提交</strong>并关闭它。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="在事务中 await 非 IndexedDB 操作会导致事务提前关闭">
+  <text class="ttl on-g" x="20" y="24">✓ 正确：事务里只 await IndexedDB 请求</text>
+  <rect class="bx-g" x="20" y="36" width="560" height="30" rx="6"/>
+  <text class="sm on-g" x="30" y="56">事务活跃中：get → put → put（请求一个接一个，事务一直有活干）</text>
+  <rect class="bx" x="586" y="36" width="150" height="30" rx="6"/>
+  <text class="sm" x="661" y="56" text-anchor="middle">自动提交 ✓</text>
+
+  <text class="ttl on-r" x="20" y="104">✗ 错误：在事务中间 await fetch()</text>
+  <rect class="bx-g" x="20" y="116" width="140" height="30" rx="6"/>
+  <text class="sm on-g" x="90" y="136" text-anchor="middle">tx 开始 · get</text>
+  <rect class="bx" x="164" y="116" width="100" height="30" rx="6"/>
+  <text class="sm" x="214" y="136" text-anchor="middle">自动提交</text>
+  <rect class="bx-d" x="268" y="116" width="220" height="30" rx="6"/>
+  <text class="sm" x="378" y="136" text-anchor="middle">await fetch(…) 网络请求中</text>
+  <rect class="bx-r" x="492" y="116" width="244" height="30" rx="6"/>
+  <text class="sm on-r" x="614" y="136" text-anchor="middle">store.put() → TransactionInactiveError</text>
+  <text class="sm" x="20" y="176">事务等不到新请求，已经在 fetch 期间关闭了。</text>
+  <text class="sm on-a" x="20" y="196">解决：先把网络请求做完，拿到数据后再开事务；或者为后续写操作新开一个事务。</text>
+</svg>
+<figcaption>图 5-7　事务不会等你的 fetch</figcaption>
+</figure>
+
+<div class="box new">
+  <div class="t">&#10024; 生产环境推荐：idb 库</div>
+  <p>
+    手写 Promise 包装容易漏掉细节。Chrome 团队成员 Jake Archibald 维护的 <a href="https://github.com/jakearchibald/idb"><code>idb</code></a>
+    只有约 1 KB，几乎是「原生 API + Promise」的一比一映射，是事实上的标准选择：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+import { openDB } from 'idb';
+
+const db = await openDB('contacts', 2, {
+  upgrade(db, oldVersion) {
+    if (oldVersion < 1) db.createObjectStore('contacts', { keyPath: 'id', autoIncrement: true });
+    if (oldVersion < 2) db.transaction.objectStore('contacts').createIndex('email', 'email');
+  }
+});
+
+await db.add('contacts', { name: 'Ava', email: 'ava@example.com' });
+const all = await db.getAll('contacts');
+const ava = await db.getFromIndex('contacts', 'email', 'ava@example.com');
+</script>
+  </div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; IndexedDB 能存什么</div>
+  <p>
+    IndexedDB 用<strong>结构化克隆</strong>保存数据：普通对象、数组、<code>Date</code>、<code>Map</code>、<code>Set</code>、<code>RegExp</code>、
+    <code>ArrayBuffer</code>、<code>Blob</code>、<code>File</code> 都能原样存取；函数、DOM 节点、类实例的方法不行。
+    容量通常可达磁盘空间的相当比例（具体由浏览器决定），可用 <code>navigator.storage.estimate()</code> 查看（见第 2 章）。
+  </p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>IndexedDB = 数据库 → 对象仓库 → 记录，索引是按某属性排序的目录；所有读写都在事务里，每个操作返回一个 <code>IDBRequest</code>。</li>
+  <li>只能在 <code>upgradeneeded</code> 里改结构；用 <code>if (oldVersion &lt; N)</code> 的阶梯式写法兼容所有旧版本。</li>
+  <li>索引 + <code>IDBKeyRange</code> 实现精确和范围查询；「包含」式搜索只能用游标全表扫描。</li>
+  <li>分页可以用 <code>advance</code>，但游标式分页（<code>lowerBound(lastKey, true)</code>）更快。</li>
+  <li>用 Promise 包装或直接使用 <code>idb</code> 库；事务中间不要 <code>await</code> 与数据库无关的操作。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个离线待办清单：仓库 <code>todos</code>（自增键），支持添加、勾选完成（用 <code>put</code> 覆盖）、删除。</li>
+    <li>升级到第 2 版：给 <code>todos</code> 加一个 <code>completed</code> 索引（提示：在 <code>upgradeneeded</code> 里通过 <code>request.transaction.objectStore('todos')</code> 拿到已有仓库）。然后实现「只看未完成」。</li>
+    <li>往仓库里插入 10000 条数据，分别用 <code>advance</code> 分页和游标式分页读取第 900 页，用 <code>performance.now()</code> 比较耗时。</li>
+    <li>故意在事务中间 <code>await fetch(...)</code>，观察 <code>TransactionInactiveError</code>，然后修正它。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var out = document.getElementById('c-out');
+  if (!window.indexedDB) { out.textContent = '当前环境不支持 IndexedDB'; return; }
+
+  function p(req) {
+    return new Promise(function (res, rej) { req.onsuccess = function () { res(req.result); }; req.onerror = function () { rej(req.error); }; });
+  }
+  var dbp = new Promise(function (res, rej) {
+    var r = indexedDB.open('webapi-tutorial-contacts', 1);
+    r.onupgradeneeded = function () {
+      var s = r.result.createObjectStore('contacts', { keyPath: 'id', autoIncrement: true });
+      s.createIndex('department', 'department');
+    };
+    r.onsuccess = function () { res(r.result); };
+    r.onerror = function () { rej(r.error); };
+  });
+  function store(mode) { return dbp.then(function (db) { return db.transaction('contacts', mode).objectStore('contacts'); }); }
+  function show(title, rows) {
+    out.textContent = title + '\n' + (rows.length ? rows.map(function (c) {
+      return '  { id: ' + c.id + ', name: ' + JSON.stringify(c.name) + ', department: ' + JSON.stringify(c.department) + ' }';
+    }).join('\n') : '  （空）');
+  }
+  function listAll() { return store('readonly').then(function (s) { return p(s.getAll()); }).then(function (r) { show('getAll() → ' + r.length + ' 条', r); }); }
+
+  document.getElementById('c-add').onclick = function () {
+    var name = document.getElementById('c-name').value.trim() || '匿名';
+    var dept = document.getElementById('c-dept').value;
+    store('readwrite').then(function (s) { return p(s.add({ name: name, department: dept })); })
+      .then(function (id) { out.textContent = 'add() 成功，自动生成的键 id = ' + id; })
+      .catch(function (e) { out.textContent = e.name + ': ' + e.message; });
+  };
+  document.getElementById('c-seed').onclick = function () {
+    var names = '赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许';
+    var depts = ['研发', '市场', '设计'];
+    store('readwrite').then(function (s) {
+      for (var i = 0; i < 20; i++) s.add({ name: names[i] + '同学', department: depts[i % 3] });
+      return new Promise(function (res) { s.transaction.oncomplete = res; });
+    }).then(listAll);
+  };
+  document.getElementById('c-clear').onclick = function () {
+    store('readwrite').then(function (s) { return p(s.clear()); }).then(listAll);
+  };
+  document.querySelectorAll('[data-dept]').forEach(function (b) {
+    b.onclick = function () {
+      var d = b.dataset.dept;
+      if (!d) return listAll();
+      store('readonly').then(function (s) { return p(s.index('department').getAll(d)); })
+        .then(function (r) { show("index('department').getAll('" + d + "') → " + r.length + ' 条', r); });
+    };
+  });
+  listAll().catch(function (e) { out.textContent = e.name + ': ' + e.message; });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Web API 实战教程 · 用浏览器原生能力写应用</title>
+<meta name="description" content="面向初学者的浏览器 Web API 中文教程，改编自《Web API Cookbook》，按 2026 年的浏览器现状更新，配有大量图解与在线小实验。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="0">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<div class="hero">
+  <span class="chapter-eyebrow">面向初学者的 19 章教程</span>
+  <h1>Web API 实战：用浏览器原生能力写应用</h1>
+  <p class="sub">
+    这套教程改编自 O'Reilly 的《Web API Cookbook: Level Up Your JavaScript Applications》（Joe Attardi 著，2024）。
+    原书的「配方」结构被完整保留 —— 每一节都从一个具体问题出发，给出代码，再解释原理 ——
+    同时按照 <strong>2026 年的浏览器现状</strong>做了全面更新：标注每个 API 的 Baseline 支持状态，补充这两年新落地的能力，
+    修正了原书和配套代码中的 30 多处错误，并为每一章绘制了图解、加入了可以直接在页面上运行的小实验。
+  </p>
+  <p style="margin-top:14px">
+    <span class="pill">Promise / async</span><span class="pill">Fetch</span><span class="pill">IndexedDB</span>
+    <span class="pill">Observer</span><span class="pill">Web Animations</span><span class="pill">Intl</span>
+    <span class="pill">Web Components</span><span class="pill">dialog / popover</span><span class="pill">Performance</span>
+    <span class="pill">View Transitions</span><span class="pill">MediaRecorder</span>
+  </p>
+</div>
+
+<h2 id="why">为什么要学 Web API？</h2>
+
+<p>
+  <strong>Web API</strong> 是浏览器暴露给 JavaScript 的一组全局对象和函数。你的代码通过它们操作页面（DOM）、发起网络请求、存储数据、调用摄像头和剪贴板……
+  JavaScript 语言本身只负责「计算」，真正让网页能<strong>做事</strong>的，是这些 API。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="浏览器 Web API 全景图，按章节分组">
+  <rect class="bx-a" x="290" y="138" width="180" height="56" rx="14"/>
+  <text class="ttl on-a" x="380" y="162" text-anchor="middle">你的 JavaScript</text>
+  <text class="sm" x="380" y="181" text-anchor="middle">只需要调用浏览器</text>
+
+  <rect class="bx-b" x="20" y="16" width="230" height="96" rx="10"/>
+  <text class="ttl on-b" x="135" y="38" text-anchor="middle">数据与通信</text>
+  <text class="sm" x="135" y="58" text-anchor="middle">① 异步 ② Web Storage</text>
+  <text class="sm" x="135" y="76" text-anchor="middle">③ URL 与路由 ④ 网络请求</text>
+  <text class="sm" x="135" y="94" text-anchor="middle">⑤ IndexedDB</text>
+
+  <rect class="bx-g" x="265" y="16" width="230" height="96" rx="10"/>
+  <text class="ttl on-g" x="380" y="38" text-anchor="middle">页面与交互</text>
+  <text class="sm" x="380" y="58" text-anchor="middle">⑥ 观察者</text>
+  <text class="sm" x="380" y="76" text-anchor="middle">⑦ 表单</text>
+  <text class="sm" x="380" y="94" text-anchor="middle">⑧ Web Animations</text>
+
+  <rect class="bx-p" x="510" y="16" width="230" height="96" rx="10"/>
+  <text class="ttl on-p" x="625" y="38" text-anchor="middle">内容与多媒体</text>
+  <text class="sm" x="625" y="58" text-anchor="middle">⑨ 语音</text>
+  <text class="sm" x="625" y="76" text-anchor="middle">⑩ 文件</text>
+  <text class="sm" x="625" y="94" text-anchor="middle">⑪ 国际化</text>
+
+  <rect class="bx" x="20" y="220" width="230" height="96" rx="10"/>
+  <text class="ttl" x="135" y="242" text-anchor="middle">组件与界面</text>
+  <text class="sm" x="135" y="262" text-anchor="middle">⑫ Web Components</text>
+  <text class="sm" x="135" y="280" text-anchor="middle">⑬ dialog / details /</text>
+  <text class="sm" x="135" y="298" text-anchor="middle">popover / 通知</text>
+
+  <rect class="bx-r" x="265" y="220" width="230" height="96" rx="10"/>
+  <text class="ttl on-r" x="380" y="242" text-anchor="middle">设备与工程</text>
+  <text class="sm" x="380" y="262" text-anchor="middle">⑭ 电池 / 网络 / 定位 / 剪贴板</text>
+  <text class="sm" x="380" y="280" text-anchor="middle">⑮ 性能测量</text>
+  <text class="sm" x="380" y="298" text-anchor="middle">⑯ 控制台</text>
+
+  <rect class="bx-d" x="510" y="220" width="230" height="96" rx="10"/>
+  <text class="ttl" x="625" y="242" text-anchor="middle">样式与媒体</text>
+  <text class="sm" x="625" y="262" text-anchor="middle">⑰ 高亮 / 字体 / 视图过渡</text>
+  <text class="sm" x="625" y="280" text-anchor="middle">⑱ 录屏 / 摄像头 / 录像</text>
+  <text class="sm" x="625" y="298" text-anchor="middle">⑲ 结语：特性检测与未来</text>
+
+  <path class="ln" d="M135 114 L300 140 M380 114 V136 M625 114 L460 140 M135 218 L300 192 M380 218 V196 M625 218 L460 192"/>
+</svg>
+<figcaption>图 0-1　本教程涉及的 Web API 全景</figcaption>
+</figure>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128230;</span><h4>更少的依赖</h4><p>以前要靠 jQuery、Moment.js、Axios、各种 UI 库完成的事，今天很多已是浏览器内置能力。</p></div>
+  <div class="card"><span class="ic">&#9889;</span><h4>更快的页面</h4><p>原生 API 不占用下载体积，由浏览器用 C++ / Rust 实现，通常比 JS 库更快。</p></div>
+  <div class="card"><span class="ic">&#128272;</span><h4>更低的风险</h4><p>开源库可能停止维护，甚至被投毒；浏览器 API 由四大浏览器厂商长期维护。</p></div>
+  <div class="card"><span class="ic">&#9855;</span><h4>更好的无障碍</h4><p>原生的 dialog、details、popover 自带键盘操作和屏幕阅读器语义，比手写组件更可靠。</p></div>
+</div>
+
+<h2 id="who">这套教程写给谁</h2>
+
+<ul>
+  <li><strong>学过 JavaScript 基础语法</strong>（变量、函数、数组、对象、箭头函数），了解一点 DOM 操作（<code>querySelector</code>、<code>addEventListener</code>）的人。</li>
+  <li><strong>习惯了框架</strong>，想补齐「浏览器本身能做什么」这块知识的前端开发者。</li>
+  <li>想减少项目依赖、写出更轻量代码的人。</li>
+</ul>
+
+<div class="box note">
+  <div class="t">&#9432; 需要什么前置知识</div>
+  <p>
+    会写函数、会用 <code>addEventListener</code> 就够了。<code>Promise</code> 和 <code>async/await</code> 不熟也没关系 ——
+    第 1 章会从零讲起，而后面几乎每一章都会用到它们，所以建议从第 1 章开始。
+  </p>
+</div>
+
+<h2 id="how">怎么使用这套教程</h2>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#129520;</span><h4>配方结构</h4><p>每一节以灰色的「问题」框开头，然后给出代码和解释。遇到实际需求时，可以直接按问题查找对应的配方。</p></div>
+  <div class="card"><span class="ic">&#9654;&#65039;</span><h4>在线小实验</h4><p>绿色标题的「试一试」区域可以直接运行。部分实验需要通过 HTTPS 访问（例如部署到 GitHub Pages 后），并授予相应权限。</p></div>
+  <div class="card"><span class="ic">&#10024;</span><h4>2026 视角</h4><p>蓝色的「2026 视角」框介绍原书出版后的新变化：新 API、支持状态更新、更好的替代方案。</p></div>
+  <div class="card"><span class="ic">&#9888;&#65039;</span><h4>原书勘误</h4><p>红色警告框中会标出原书或配套代码中的错误，并给出修正后的写法。代码块标题里带「已修正」的就是改过的版本。</p></div>
+</div>
+
+<h3>Baseline 徽章</h3>
+
+<p>
+  浏览器支持程度是使用 Web API 时最常见的顾虑。本教程统一采用 <strong>Baseline</strong> 口径标注（由 W3C WebDX 社区组制定，caniuse 与 MDN 均已采用）：
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>徽章</th><th>含义</th><th>建议</th></tr>
+  <tr><td><span class="bl wide">广泛可用</span></td><td>在 Chrome、Edge、Firefox、Safari 的桌面与移动版本中都已支持超过 30 个月</td><td>放心使用</td></tr>
+  <tr><td><span class="bl newly">Baseline 2025</span></td><td>在该年份首次在上述所有浏览器的最新版本中可用</td><td>面向较新浏览器的项目可以使用；需要兼容旧设备时准备降级</td></tr>
+  <tr><td><span class="bl limited">有限支持</span></td><td>至少有一个主要浏览器尚未支持</td><td>只作为渐进增强，必须特性检测并提供降级方案</td></tr>
+  <tr><td><span class="bl dead">已废弃</span></td><td>规范已不推荐或浏览器已移除</td><td>不要在新代码中使用</td></tr>
+</table>
+</div>
+
+<p>浏览器的发展速度很快，本教程中的支持信息以 2026 年为准。在正式项目中使用前，请到 <a href="https://caniuse.com">caniuse.com</a> 或 <a href="https://developer.mozilla.org/zh-CN/">MDN</a> 查看最新数据。</p>
+
+<h3>学习路线</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="推荐的学习路线">
+  <rect class="bx-a" x="20" y="50" width="140" height="64" rx="10"/>
+  <text class="ttl on-a" x="90" y="76" text-anchor="middle">第 1 章</text>
+  <text class="sm" x="90" y="96" text-anchor="middle">异步基础（必读）</text>
+  <path class="ln-a" d="M162 82 H206" marker-end="url(#ar-a)"/>
+  <rect class="bx-b" x="210" y="50" width="160" height="64" rx="10"/>
+  <text class="ttl on-b" x="290" y="76" text-anchor="middle">第 2 – 5 章</text>
+  <text class="sm" x="290" y="96" text-anchor="middle">存储、URL、网络</text>
+  <path class="ln" d="M372 82 H416" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="420" y="50" width="160" height="64" rx="10"/>
+  <text class="ttl on-g" x="500" y="76" text-anchor="middle">第 6 – 18 章</text>
+  <text class="sm" x="500" y="96" text-anchor="middle">按兴趣任意顺序阅读</text>
+  <path class="ln" d="M582 82 H626" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="630" y="50" width="110" height="64" rx="10"/>
+  <text class="ttl on-p" x="685" y="76" text-anchor="middle">第 19 章</text>
+  <text class="sm" x="685" y="96" text-anchor="middle">总结与展望</text>
+  <text class="sm" x="380" y="150" text-anchor="middle">第 12 章（Web Components）之后再读第 13 章效果更好；第 15、16 章是调试和优化的工具箱，随时查阅</text>
+</svg>
+<figcaption>图 0-2　推荐的阅读顺序</figcaption>
+</figure>
+
+<h2 id="toc">全部章节</h2>
+<div id="toc-grid"></div>
+
+<h2 id="source">关于源代码</h2>
+
+<p>
+  本仓库按章节保存了原书的全部示例代码（如 <code>01 - async/1-1-working-with-promises/1-01-using-promises.js</code>），
+  教程中每个代码块的标题都标注了对应的文件名，方便对照。教程中的代码注释已翻译为中文；有错误的示例已在教程中修正并注明。
+  原书作者的配套网站 <a href="https://WebAPIs.info">WebAPIs.info</a> 提供了更多在线演示。
+</p>
+
+<div class="box tip" style="margin-top:28px">
+  <div class="t">&#128161; 一句话总结</div>
+  <p>
+    在引入一个库之前，先问一句：<strong>浏览器自己能不能做到？</strong>
+    —— 这套教程的 19 章，就是在一遍遍回答这个问题。
+  </p>
+</div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

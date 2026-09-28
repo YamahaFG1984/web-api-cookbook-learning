@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 11 章 · 国际化 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="11">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 11 章</span>
+<h1>国际化（Intl）</h1>
+<p class="lede">
+  同一个日期，美国人写 <code>6/2/25</code>，德国人写 <code>2.6.25</code>，中国人写 <code>2025/6/2</code>；
+  同一个数字，英文写 <code>5,200.55</code>，德文写 <code>5.200,55</code>。
+  浏览器内置的 <code>Intl</code> 对象掌握着全世界几百种语言和地区的格式规则，以前要靠 Moment.js、Numeral.js 做的事，今天大多一行原生代码就能完成。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解「区域设置」（locale）标签的组成，知道如何获取用户的语言</li>
+    <li>格式化日期、相对时间、数字、货币、单位、价格区间</li>
+    <li>用 <code>PluralRules</code> 处理单复数，用 <code>ListFormat</code> 拼接列表，用 <code>Collator</code> 排序</li>
+    <li>用 <code>Segmenter</code> 正确地统计字、词、句 —— 包括中文分词</li>
+    <li>了解 <code>DurationFormat</code>、<code>DisplayNames</code> 和新的 <code>Temporal</code> 日期 API</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">区域设置（locale）</h2>
+
+<p>
+  几乎所有 Intl API 的第一个参数都是 <strong>locale</strong>：一个 BCP 47 语言标签，通常由「语言 + 地区」组成，
+  例如 <code>en-US</code>（美国英语）、<code>en-GB</code>（英国英语）、<code>zh-CN</code>（中国大陆简体中文）、<code>zh-TW</code>（台湾繁体中文）。
+  它还可以带上更多信息：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="locale 标签的组成部分">
+  <g class="mono" style="font-size:19px">
+    <text class="on-b" x="40" y="70" textLength="30" lengthAdjust="spacingAndGlyphs">zh</text>
+    <text x="70" y="70" style="fill:var(--fg-faint)" textLength="12" lengthAdjust="spacingAndGlyphs">-</text>
+    <text class="on-p" x="82" y="70" textLength="60" lengthAdjust="spacingAndGlyphs">Hans</text>
+    <text x="142" y="70" style="fill:var(--fg-faint)" textLength="12" lengthAdjust="spacingAndGlyphs">-</text>
+    <text class="on-g" x="154" y="70" textLength="30" lengthAdjust="spacingAndGlyphs">CN</text>
+    <text x="184" y="70" style="fill:var(--fg-faint)" textLength="12" lengthAdjust="spacingAndGlyphs">-</text>
+    <text class="on-a" x="196" y="70" textLength="300" lengthAdjust="spacingAndGlyphs">u-ca-chinese-nu-hanidec</text>
+  </g>
+  <path class="ln-b" d="M40 80 H70"/><text class="sm on-b" x="55" y="100" text-anchor="middle">语言</text>
+  <path class="ln-p" d="M82 80 H142"/><text class="sm on-p" x="112" y="100" text-anchor="middle">文字（可选）</text>
+  <path class="ln-g" d="M154 80 H184"/><text class="sm on-g" x="169" y="120" text-anchor="middle">地区</text>
+  <path class="ln-a" d="M196 80 H496"/><text class="sm on-a" x="346" y="100" text-anchor="middle">Unicode 扩展（可选）：日历 = 农历，数字 = 汉字数字</text>
+  <text class="sm" x="530" y="50">常见写法：</text>
+  <text class="mono" x="530" y="72">en-US · en-GB · de-DE</text>
+  <text class="mono" x="530" y="92">zh-CN · zh-TW · ja-JP</text>
+  <text class="sm" x="40" y="156">不传 locale（或传 undefined）时，使用浏览器的默认区域设置</text>
+</svg>
+<figcaption>图 11-1　locale 标签：语言-文字-地区-扩展</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+navigator.language;    // 用户首选语言，如 'zh-CN'
+navigator.languages;   // 按偏好排序的完整列表，如 ['zh-CN', 'zh', 'en-US', 'en']
+
+// 查看某个格式器最终采用了什么设置（包括时区）
+new Intl.DateTimeFormat().resolvedOptions().timeZone;   // 如 'Asia/Shanghai'
+</script>
+</div>
+
+<p>Intl 家族一览（本章会逐个用到）：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="Intl 对象下的各个格式化器">
+  <rect class="bx-a" x="310" y="92" width="140" height="46" rx="10"/>
+  <text class="ttl on-a" x="380" y="120" text-anchor="middle">Intl</text>
+
+  <rect class="bx-b" x="20" y="16" width="180" height="40" rx="8"/><text class="mono on-b" x="110" y="34" text-anchor="middle">DateTimeFormat</text><text class="sm" x="110" y="49" text-anchor="middle">日期时间 · 11.1 / 11.2</text>
+  <rect class="bx-b" x="20" y="66" width="180" height="40" rx="8"/><text class="mono on-b" x="110" y="84" text-anchor="middle">RelativeTimeFormat</text><text class="sm" x="110" y="99" text-anchor="middle">「3 天前」· 11.3</text>
+  <rect class="bx-b" x="20" y="116" width="180" height="40" rx="8"/><text class="mono on-b" x="110" y="134" text-anchor="middle">DurationFormat</text><text class="sm" x="110" y="149" text-anchor="middle">「1 小时 30 分」· 新</text>
+
+  <rect class="bx-g" x="290" y="16" width="180" height="40" rx="8"/><text class="mono on-g" x="380" y="34" text-anchor="middle">NumberFormat</text><text class="sm" x="380" y="49" text-anchor="middle">数字 货币 单位 · 11.4–11.7</text>
+  <rect class="bx-g" x="290" y="166" width="180" height="40" rx="8"/><text class="mono on-g" x="380" y="184" text-anchor="middle">PluralRules</text><text class="sm" x="380" y="199" text-anchor="middle">单复数 · 11.8</text>
+
+  <rect class="bx-p" x="560" y="16" width="180" height="40" rx="8"/><text class="mono on-p" x="650" y="34" text-anchor="middle">Segmenter</text><text class="sm" x="650" y="49" text-anchor="middle">分字 分词 分句 · 11.9</text>
+  <rect class="bx-p" x="560" y="66" width="180" height="40" rx="8"/><text class="mono on-p" x="650" y="84" text-anchor="middle">ListFormat</text><text class="sm" x="650" y="99" text-anchor="middle">「A、B 和 C」· 11.10</text>
+  <rect class="bx-p" x="560" y="116" width="180" height="40" rx="8"/><text class="mono on-p" x="650" y="134" text-anchor="middle">Collator</text><text class="sm" x="650" y="149" text-anchor="middle">排序比较 · 11.11</text>
+  <rect class="bx" x="560" y="166" width="180" height="40" rx="8"/><text class="mono" x="650" y="184" text-anchor="middle">DisplayNames · Locale</text><text class="sm" x="650" y="199" text-anchor="middle">语言 / 地区名称</text>
+
+  <path class="ln" d="M202 36 L308 102 M202 86 L308 110 M202 136 L308 124"/>
+  <path class="ln" d="M380 58 V90 M380 140 V164"/>
+  <path class="ln" d="M558 36 L452 102 M558 86 L452 110 M558 136 L452 124 M558 186 L452 132"/>
+</svg>
+<figcaption>图 11-2　Intl 命名空间下的格式化器</figcaption>
+</figure>
+
+<div class="box tip">
+  <div class="t">&#128161; 格式器对象可以复用</div>
+  <p>
+    创建 <code>Intl.*</code> 对象需要加载语言数据，开销比调用 <code>format()</code> 大得多。
+    在循环或频繁渲染的列表中，<strong>创建一次、反复使用</strong>，不要每次都 <code>new</code>。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：切换 locale，观察本章所有格式器的输出</div>
+  <div class="b">
+    <div class="row">
+      <select id="loc">
+        <option value="zh-CN">zh-CN 简体中文</option>
+        <option value="zh-TW">zh-TW 繁体中文（台湾）</option>
+        <option value="en-US">en-US 美国英语</option>
+        <option value="en-GB">en-GB 英国英语</option>
+        <option value="de-DE">de-DE 德语</option>
+        <option value="ja-JP">ja-JP 日语</option>
+        <option value="ar-EG">ar-EG 阿拉伯语（埃及）</option>
+        <option value="hi-IN">hi-IN 印地语</option>
+      </select>
+      <span class="hint">你的浏览器语言：<code id="nav-lang"></code></span>
+    </div>
+    <div class="out" id="loc-out"></div>
+  </div>
+</div>
+
+<h2 id="r11-1"><span class="rn">11.1</span>格式化日期</h2>
+
+<p class="prob">按用户所在地区的习惯显示一个 <code>Date</code>。</p>
+
+<div class="code" data-lang="js" data-file="11-01-format-date.js">
+<script type="text/plain">
+const formatter = new Intl.DateTimeFormat(navigator.language, { dateStyle: 'long' });
+const formattedDate = formatter.format(new Date());
+// zh-CN: '2025年6月2日'    en-US: 'June 2, 2025'
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th><code>dateStyle</code></th><th>en-US</th><th>zh-CN</th></tr>
+  <tr><td><code>short</code></td><td>6/2/25</td><td>2025/6/2</td></tr>
+  <tr><td><code>medium</code></td><td>Jun 2, 2025</td><td>2025年6月2日</td></tr>
+  <tr><td><code>long</code></td><td>June 2, 2025</td><td>2025年6月2日</td></tr>
+  <tr><td><code>full</code></td><td>Monday, June 2, 2025</td><td>2025年6月2日星期一</td></tr>
+</table>
+</div>
+
+<p>加上 <code>timeStyle</code> 同时显示时间：</p>
+
+<div class="code" data-lang="js" data-file="11-02-format-date-time.js">
+<script type="text/plain">
+const formatter = new Intl.DateTimeFormat(navigator.language, {
+  dateStyle: 'long',
+  timeStyle: 'long'
+});
+const formattedDateAndTime = formatter.format(new Date());
+// en-US: 'June 2, 2025 at 2:30:00 PM GMT+8'
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 需要更精细的控制？逐项指定</div>
+  <p><code>dateStyle / timeStyle</code> 是「套餐」；不满意可以逐个指定字段（但不能与套餐混用）：</p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: 'long', day: 'numeric', weekday: 'short'
+}).format(date);                                        // '2025年6月2日周一'
+
+// 指定时区：服务器存 UTC，按用户或指定时区显示
+new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'long', timeStyle: 'long', timeZone: 'America/New_York'
+}).format(date);                                        // 'June 2, 2025 at 2:30:00 AM EDT'
+
+// 快捷写法：Date 上的 toLocale*String 内部用的也是 Intl
+date.toLocaleDateString('zh-CN', { dateStyle: 'full' });
+</script>
+  </div>
+</div>
+
+<h2 id="r11-2"><span class="rn">11.2</span>拆分格式化后的日期</h2>
+
+<p class="prob">你想让格式化后的日期各部分有不同的样式（比如年份灰色、日期加粗）。</p>
+
+<div class="code" data-lang="js" data-file="11-03-format-parts.js">
+<script type="text/plain">
+const formatter = new Intl.DateTimeFormat(navigator.language, { dateStyle: 'short' });
+const parts = formatter.formatToParts(new Date());
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="formatToParts 把日期拆成带类型的片段">
+  <text class="mono" x="20" y="34">en-US short：</text>
+  <rect class="bx-b" x="140" y="16" width="50" height="28" rx="5"/><text class="mono on-b" x="165" y="35" text-anchor="middle">6</text>
+  <rect class="bx" x="196" y="16" width="34" height="28" rx="5"/><text class="mono" x="213" y="35" text-anchor="middle">/</text>
+  <rect class="bx-g" x="236" y="16" width="50" height="28" rx="5"/><text class="mono on-g" x="261" y="35" text-anchor="middle">2</text>
+  <rect class="bx" x="292" y="16" width="34" height="28" rx="5"/><text class="mono" x="309" y="35" text-anchor="middle">/</text>
+  <rect class="bx-a" x="332" y="16" width="50" height="28" rx="5"/><text class="mono on-a" x="357" y="35" text-anchor="middle">25</text>
+  <text class="sm on-b" x="165" y="62" text-anchor="middle">month</text>
+  <text class="sm" x="213" y="62" text-anchor="middle">literal</text>
+  <text class="sm on-g" x="261" y="62" text-anchor="middle">day</text>
+  <text class="sm" x="309" y="62" text-anchor="middle">literal</text>
+  <text class="sm on-a" x="357" y="62" text-anchor="middle">year</text>
+
+  <text class="mono" x="20" y="104">zh-CN short：</text>
+  <rect class="bx-a" x="140" y="86" width="60" height="28" rx="5"/><text class="mono on-a" x="170" y="105" text-anchor="middle">2025</text>
+  <rect class="bx" x="206" y="86" width="34" height="28" rx="5"/><text class="mono" x="223" y="105" text-anchor="middle">/</text>
+  <rect class="bx-b" x="246" y="86" width="50" height="28" rx="5"/><text class="mono on-b" x="271" y="105" text-anchor="middle">6</text>
+  <rect class="bx" x="302" y="86" width="34" height="28" rx="5"/><text class="mono" x="319" y="105" text-anchor="middle">/</text>
+  <rect class="bx-g" x="342" y="86" width="50" height="28" rx="5"/><text class="mono on-g" x="367" y="105" text-anchor="middle">2</text>
+  <text class="sm on-a" x="170" y="132" text-anchor="middle">year</text>
+  <text class="sm on-b" x="271" y="132" text-anchor="middle">month</text>
+  <text class="sm on-g" x="367" y="132" text-anchor="middle">day</text>
+
+  <text class="sm" x="430" y="40">顺序因语言而异 —— 这正是不能</text>
+  <text class="sm" x="430" y="58">自己用字符串拼接日期的原因。</text>
+  <text class="sm" x="430" y="90">按 type 给每一段套上不同的</text>
+  <text class="sm" x="430" y="108">&lt;span class="…"&gt; 即可分别设置样式</text>
+</svg>
+<figcaption>图 11-3　formatToParts 返回 { type, value } 数组</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="11-04-date-parts.js（示例输出，en-US）">
+<script type="text/plain">
+[
+  { type: 'month',   value: '6' },
+  { type: 'literal', value: '/' },
+  { type: 'day',     value: '2' },
+  { type: 'literal', value: '/' },
+  { type: 'year',    value: '25' }
+]
+
+// 应用：给每段包上 span
+const html = parts
+  .map(({ type, value }) => `<span class="date-${type}">${value}</span>`)
+  .join('');
+</script>
+</div>
+
+<h2 id="r11-3"><span class="rn">11.3</span>格式化相对时间</h2>
+
+<p class="prob">把某个日期和今天的差距显示成「2 天前」「3 个月后」这种形式。</p>
+
+<p>
+  <code>Intl.RelativeTimeFormat</code> 只负责「翻译」：给它一个带符号的数值和单位，比如 <code>format(-2, 'day')</code>，它输出「2天前」。
+  至于差多少、用什么单位，需要你自己先算出来：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="相对时间的数轴">
+  <path class="ln" d="M20 70 H740" marker-end="url(#ar)"/>
+  <circle cx="380" cy="70" r="7" style="fill:var(--accent)"/>
+  <text class="lbl on-a" x="380" y="50" text-anchor="middle">今天</text>
+  <circle cx="300" cy="70" r="5" style="fill:var(--blue)"/><text class="mono on-b" x="300" y="98" text-anchor="middle">-1 day</text><text class="sm" x="300" y="116" text-anchor="middle">1天前 / 昨天*</text>
+  <circle cx="200" cy="70" r="5" style="fill:var(--blue)"/><text class="mono on-b" x="200" y="98" text-anchor="middle">-5 month</text><text class="sm" x="200" y="116" text-anchor="middle">5个月前</text>
+  <circle cx="70" cy="70" r="5" style="fill:var(--blue)"/><text class="mono on-b" x="70" y="98" text-anchor="middle">-2 year</text><text class="sm" x="70" y="116" text-anchor="middle">2年前</text>
+  <circle cx="480" cy="70" r="5" style="fill:var(--green)"/><text class="mono on-g" x="480" y="98" text-anchor="middle">+3 hour</text><text class="sm" x="480" y="116" text-anchor="middle">3小时后</text>
+  <circle cx="660" cy="70" r="5" style="fill:var(--green)"/><text class="mono on-g" x="660" y="98" text-anchor="middle">+3 month</text><text class="sm" x="660" y="116" text-anchor="middle">3个月后</text>
+  <text class="sm" x="380" y="144" text-anchor="middle">* 设置 numeric: 'auto' 时，-1 day 输出「昨天」，+1 day 输出「明天」</text>
+</svg>
+<figcaption>图 11-4　负数表示过去，正数表示将来</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="11-05-find-offset.js（原书版本）">
+<script type="text/plain">
+function getDateDifference(fromDate) {
+  const today = new Date();
+
+  if (fromDate.getFullYear() !== today.getFullYear()) {
+    return { offset: fromDate.getFullYear() - today.getFullYear(), unit: 'year' };
+  } else if (fromDate.getMonth() !== today.getMonth()) {
+    return { offset: fromDate.getMonth() - today.getMonth(), unit: 'month' };
+  } else {
+    // 还可以继续细化到小时、分钟、秒
+    return { offset: fromDate.getDate() - today.getDate(), unit: 'day' };
+  }
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="11-06-format-relative-date.js">
+<script type="text/plain">
+function getRelativeDate(fromDate) {
+  const { offset, unit } = getDateDifference(fromDate);
+  const format = new Intl.RelativeTimeFormat();
+  return format.format(offset, unit);
+}
+
+// 假设今天是 2023 年 10 月 7 日（注意：月份从 0 开始）
+getRelativeDate(new Date(2023, 9, 1));   // '6 days ago'
+getRelativeDate(new Date(2023, 4, 2));   // '5 months ago'
+getRelativeDate(new Date(2025, 5, 2));   // 'in 2 years'
+</script>
+</div>
+
+<p>这是一个「近似」：5 月 2 日到 10 月 7 日其实是 5 个月零 5 天，但只显示「5 个月前」。这正是相对时间想要的效果。</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 按字段比较的缺陷</div>
+  <p>
+    原书的算法逐个比较「年、月、日」字段，跨年时会出问题：今天是 2024 年 1 月 2 日，传入 2023 年 12 月 30 日，
+    年份不同，于是输出「1 年前」—— 实际上只差 3 天。更稳妥的做法是先算出<strong>毫秒差</strong>，再按大小选择单位：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const UNITS = [
+  ['year',   365 * 24 * 3600 * 1000],
+  ['month',   30 * 24 * 3600 * 1000],
+  ['week',     7 * 24 * 3600 * 1000],
+  ['day',          24 * 3600 * 1000],
+  ['hour',              3600 * 1000],
+  ['minute',              60 * 1000],
+  ['second',                   1000],
+];
+
+function getRelativeDate(date, locale = navigator.language) {
+  const diff = date - Date.now();                       // 负数 = 过去
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  for (const [unit, ms] of UNITS) {
+    if (Math.abs(diff) >= ms || unit === 'second') {
+      return rtf.format(Math.round(diff / ms), unit);
+    }
+  }
+}
+
+getRelativeDate(new Date(Date.now() - 86400000), 'zh-CN');  // '昨天'
+getRelativeDate(new Date(Date.now() + 3 * 3600000), 'zh-CN'); // '3小时后'
+</script>
+  </div>
+</div>
+
+<h2 id="r11-4"><span class="rn">11.4</span>格式化数字</h2>
+
+<p class="prob">按地区习惯为数字加上千位分隔符和小数点。</p>
+
+<div class="code" data-lang="js" data-file="11-07 / 11-08">
+<script type="text/plain">
+new Intl.NumberFormat().format(5200.55);          // en-US: '5,200.55'
+new Intl.NumberFormat('de-DE').format(5200.55);   // '5.200,55'  德语：点分千位，逗号分小数
+new Intl.NumberFormat('en-IN').format(1234567.8); // '12,34,567.8' 印度：按「拉克」分组
+</script>
+</div>
+
+<p>还可以格式化一个<strong>数字区间</strong>：</p>
+
+<div class="code" data-lang="js" data-file="11-09-format-range.js">
+<script type="text/plain">
+new Intl.NumberFormat('en-US').formatRange(1000, 5000);   // '1,000–5,000'
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>常用选项</th><th>示例</th><th>zh-CN 输出</th></tr>
+  <tr><td><code>style: 'percent'</code></td><td><code>format(0.256)</code></td><td>26%</td></tr>
+  <tr><td><code>notation: 'compact'</code></td><td><code>format(123456789)</code></td><td>1.2亿（en-US：123M）</td></tr>
+  <tr><td><code>signDisplay: 'always'</code></td><td><code>format(5)</code></td><td>+5</td></tr>
+  <tr><td><code>minimumIntegerDigits: 2</code></td><td><code>format(7)</code></td><td>07</td></tr>
+  <tr><td>locale <code>'zh-CN-u-nu-hanidec'</code> + <code>useGrouping: false</code></td><td><code>format(2025)</code></td><td>二〇二五</td></tr>
+</table>
+</div>
+
+<h2 id="r11-5"><span class="rn">11.5</span>保留小数位</h2>
+
+<p class="prob">把一个小数四舍五入到指定的小数位数再显示。</p>
+
+<div class="code" data-lang="js" data-file="11-10-round-number.js">
+<script type="text/plain">
+function roundToTwoDecimalPlaces(number) {
+  const format = new Intl.NumberFormat(navigator.language, {
+    maximumFractionDigits: 2
+  });
+  return format.format(number);
+}
+
+roundToTwoDecimalPlaces(5.49125);   // '5.49'
+roundToTwoDecimalPlaces(5.49621);   // '5.5'   ← 注意末尾的 0 被省略了
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; maximum 与 minimum</div>
+  <p>
+    <code>maximumFractionDigits: 2</code> 表示「<strong>最多</strong>两位」，所以 5.50 显示为 5.5。
+    要固定显示两位（例如金额），同时设置 <code>minimumFractionDigits: 2</code>。
+    与 <code>number.toFixed(2)</code> 相比，Intl 的结果带有本地化的千位分隔符和小数点。
+    另外，<code>roundingMode</code> 选项（如 <code>'floor'</code>、<code>'halfEven'</code>）可以控制舍入方式。<span class="bl newly">Baseline 2023</span>
+  </p>
+</div>
+
+<h2 id="r11-6"><span class="rn">11.6</span>格式化价格区间</h2>
+
+<p class="prob">给定一组价格，显示为「最低价–最高价」的货币区间。</p>
+
+<div class="code" data-lang="js" data-file="11-11-format-price-range.js">
+<script type="text/plain">
+function formatPriceRange(prices) {
+  const format = new Intl.NumberFormat(navigator.language, {
+    style: 'currency',   // 原书这里把逗号误印成了句点
+    // 使用 currency 样式时必须指定货币代码（ISO 4217）
+    currency: 'USD'
+  });
+
+  return format.formatRange(
+    Math.min(...prices),   // 用展开语法把数组元素作为多个参数
+    Math.max(...prices)
+  );
+}
+
+formatPriceRange([5.5, 3, 1.75, 11, 9.5]);   // en-US: '$1.75 – $11.00'
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 货币由你决定，格式由 locale 决定</div>
+  <p>
+    <code>currency</code> 是「钱是什么币种」（业务数据），<code>locale</code> 是「用谁的习惯写」（用户偏好），两者相互独立。
+    <code>new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(1234.5)</code> 得到 <code>¥1,234.50</code>；
+    日元没有小数，<code>JPY</code> 会自动四舍五入到整数。
+  </p>
+</div>
+
+<h2 id="r11-7"><span class="rn">11.7</span>格式化计量单位</h2>
+
+<p class="prob">显示带单位的数字，比如「1,000 GB」。</p>
+
+<div class="code" data-lang="js" data-file="11-12-format-gigabytes.js">
+<script type="text/plain">
+const format = new Intl.NumberFormat(navigator.language, {
+  style: 'unit',
+  unit: 'gigabyte'
+});
+
+format.format(1000);   // en-US: '1,000 GB'
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th><code>unitDisplay</code></th><th>en-US</th><th>zh-CN</th></tr>
+  <tr><td><code>short</code>（默认）</td><td>1,000 GB</td><td>1,000 GB</td></tr>
+  <tr><td><code>narrow</code></td><td>1,000GB</td><td>1,000 GB</td></tr>
+  <tr><td><code>long</code></td><td>1,000 gigabytes</td><td>1,000吉字节</td></tr>
+</table>
+</div>
+
+<p>支持的单位还有 <code>kilometer</code>、<code>celsius</code>、<code>kilogram</code>、<code>liter</code>、<code>megabit-per-second</code> 等（复合单位用 <code>-per-</code> 连接）。</p>
+
+<h2 id="r11-8"><span class="rn">11.8</span>单复数规则</h2>
+
+<p class="prob">英语里「1 user」和「3 users」写法不同，别的语言规则更复杂，你想让文案在各种语言下都正确。</p>
+
+<div class="code" data-lang="js" data-file="11-13-plural-form.js">
+<script type="text/plain">
+const users = getUsers();
+const rules = new Intl.PluralRules('en-US');
+const form = rules.select(users.length);   // 'one' 或 'other'
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="11-14-full-solution.js">
+<script type="text/plain">
+function formatUserCount(users) {
+  // 为每种复数形式准备一条文案
+  const messages = {
+    one: 'There is 1 user.',
+    other: `There are ${users.length} users.`
+  };
+
+  // 由 PluralRules 决定用哪一条
+  const rules = new Intl.PluralRules('en-US');
+  return messages[rules.select(users.length)];
+}
+</script>
+</div>
+
+<p><code>select()</code> 返回的是一个<strong>类别名</strong>，不同语言的类别数量差别很大：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="不同语言的复数类别数量">
+  <text class="mono" x="20" y="36">zh 中文</text>
+  <rect class="bx-g" x="150" y="18" width="90" height="28" rx="6"/><text class="mono on-g" x="195" y="37" text-anchor="middle">other</text>
+  <text class="sm" x="260" y="37">1 个用户、3 个用户 —— 名词没有单复数变化</text>
+
+  <text class="mono" x="20" y="80">en 英语</text>
+  <rect class="bx-b" x="150" y="62" width="90" height="28" rx="6"/><text class="mono on-b" x="195" y="81" text-anchor="middle">one</text>
+  <rect class="bx-g" x="246" y="62" width="90" height="28" rx="6"/><text class="mono on-g" x="291" y="81" text-anchor="middle">other</text>
+  <text class="sm" x="356" y="81">1 user / 0 users, 2 users</text>
+
+  <text class="mono" x="20" y="124">ru 俄语</text>
+  <rect class="bx-b" x="150" y="106" width="90" height="28" rx="6"/><text class="mono on-b" x="195" y="125" text-anchor="middle">one</text>
+  <rect class="bx-a" x="246" y="106" width="90" height="28" rx="6"/><text class="mono on-a" x="291" y="125" text-anchor="middle">few</text>
+  <rect class="bx-p" x="342" y="106" width="90" height="28" rx="6"/><text class="mono on-p" x="387" y="125" text-anchor="middle">many</text>
+  <rect class="bx-g" x="438" y="106" width="90" height="28" rx="6"/><text class="mono on-g" x="483" y="125" text-anchor="middle">other</text>
+  <text class="sm" x="548" y="125">1 / 2–4 / 5–20 / 小数</text>
+
+  <text class="mono" x="20" y="168">ar 阿拉伯语</text>
+  <rect class="bx" x="150" y="150" width="70" height="28" rx="6"/><text class="mono" x="185" y="169" text-anchor="middle">zero</text>
+  <rect class="bx-b" x="224" y="150" width="70" height="28" rx="6"/><text class="mono on-b" x="259" y="169" text-anchor="middle">one</text>
+  <rect class="bx-r" x="298" y="150" width="70" height="28" rx="6"/><text class="mono on-r" x="333" y="169" text-anchor="middle">two</text>
+  <rect class="bx-a" x="372" y="150" width="70" height="28" rx="6"/><text class="mono on-a" x="407" y="169" text-anchor="middle">few</text>
+  <rect class="bx-p" x="446" y="150" width="70" height="28" rx="6"/><text class="mono on-p" x="481" y="169" text-anchor="middle">many</text>
+  <rect class="bx-g" x="520" y="150" width="70" height="28" rx="6"/><text class="mono on-g" x="555" y="169" text-anchor="middle">other</text>
+  <text class="sm" x="610" y="169">六种形式</text>
+  <text class="sm" x="20" y="202">所以文案要按「类别」准备，而不是写死 if (n === 1)</text>
+</svg>
+<figcaption>图 11-5　PluralRules 的类别：从 1 种到 6 种</figcaption>
+</figure>
+
+<p>
+  <code>PluralRules</code> 还有一个「序数」模式（<code>{ type: 'ordinal' }</code>），用来生成英文的 1st、2nd、3rd：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const ordinal = new Intl.PluralRules('en-US', { type: 'ordinal' });
+const suffixes = { one: 'st', two: 'nd', few: 'rd', other: 'th' };
+const format = n => n + suffixes[ordinal.select(n)];
+
+[1, 2, 3, 4, 11, 12, 13, 21, 22, 23].map(format);
+// ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd']
+// 注意 11、12、13 是例外 —— 规则已经替你处理好了
+</script>
+</div>
+
+<h2 id="r11-9"><span class="rn">11.9</span>统计字数、词数和句数</h2>
+
+<p class="prob">按照语言规则统计一段文字的字符数、单词数、句子数。</p>
+
+<div class="code" data-lang="js" data-file="11-15-getting-counts.js（原书版本）">
+<script type="text/plain">
+function getCounts(text) {
+  const characters = new Intl.Segmenter(navigator.language, { granularity: 'grapheme' });
+  const words      = new Intl.Segmenter(navigator.language, { granularity: 'word' });
+  const sentences  = new Intl.Segmenter(navigator.language, { granularity: 'sentence' });
+
+  // segment() 返回一个可迭代对象，展开成数组后取长度
+  return {
+    characters: [...characters.segment(text)].length,
+    words: [...words.segment(text)].length,
+    sentences: [...sentences.segment(text)].length
+  };
+}
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 词数被高估了：要过滤 isWordLike</div>
+  <p>
+    按 <code>word</code> 切分时，空格和标点也会成为独立的片段。对 <code>"Hello, world!"</code>，原书的写法会数出 5 个「词」（Hello / , / 空格 / world / !）。
+    每个片段都有一个 <code>isWordLike</code> 属性，只数它为 <code>true</code> 的：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const words = [...wordSegmenter.segment(text)].filter(s => s.isWordLike).length;
+</script>
+  </div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="Segmenter 的三种粒度对中文句子的切分">
+  <text class="mono" x="20" y="28">原文：今天天气很好。我们去公园吧！👨‍👩‍👧</text>
+
+  <text class="sm" x="20" y="66">grapheme</text>
+  <g>
+    <rect class="bx-b" x="100" y="50" width="24" height="24" rx="4"/><text class="sm on-b" x="112" y="67" text-anchor="middle">今</text>
+    <rect class="bx-b" x="128" y="50" width="24" height="24" rx="4"/><text class="sm on-b" x="140" y="67" text-anchor="middle">天</text>
+    <rect class="bx-b" x="156" y="50" width="24" height="24" rx="4"/><text class="sm on-b" x="168" y="67" text-anchor="middle">天</text>
+    <rect class="bx-b" x="184" y="50" width="24" height="24" rx="4"/><text class="sm on-b" x="196" y="67" text-anchor="middle">气</text>
+    <text class="sm" x="220" y="67">……</text>
+    <rect class="bx-a" x="250" y="50" width="40" height="24" rx="4"/><text class="sm" x="270" y="67" text-anchor="middle">👨‍👩‍👧</text>
+    <text class="sm on-a" x="300" y="67">一家人表情 = 1 个字形（但 .length 是 8！）</text>
+  </g>
+
+  <text class="sm" x="20" y="116">word</text>
+  <g>
+    <rect class="bx-g" x="100" y="100" width="48" height="24" rx="4"/><text class="sm on-g" x="124" y="117" text-anchor="middle">今天</text>
+    <rect class="bx-g" x="152" y="100" width="48" height="24" rx="4"/><text class="sm on-g" x="176" y="117" text-anchor="middle">天气</text>
+    <rect class="bx-g" x="204" y="100" width="48" height="24" rx="4"/><text class="sm on-g" x="228" y="117" text-anchor="middle">很好</text>
+    <rect class="bx-d" x="256" y="100" width="24" height="24" rx="4"/><text class="sm" x="268" y="117" text-anchor="middle">。</text>
+    <rect class="bx-g" x="284" y="100" width="48" height="24" rx="4"/><text class="sm on-g" x="308" y="117" text-anchor="middle">我们</text>
+    <rect class="bx-g" x="336" y="100" width="24" height="24" rx="4"/><text class="sm on-g" x="348" y="117" text-anchor="middle">去</text>
+    <rect class="bx-g" x="364" y="100" width="48" height="24" rx="4"/><text class="sm on-g" x="388" y="117" text-anchor="middle">公园</text>
+    <rect class="bx-g" x="416" y="100" width="24" height="24" rx="4"/><text class="sm on-g" x="428" y="117" text-anchor="middle">吧</text>
+    <rect class="bx-d" x="444" y="100" width="24" height="24" rx="4"/><text class="sm" x="456" y="117" text-anchor="middle">！</text>
+    <text class="sm on-g" x="480" y="117">中文没有空格，split(' ') 无能为力</text>
+  </g>
+
+  <text class="sm" x="20" y="166">sentence</text>
+  <rect class="bx-p" x="100" y="150" width="180" height="24" rx="4"/><text class="sm on-p" x="190" y="167" text-anchor="middle">今天天气很好。</text>
+  <rect class="bx-p" x="284" y="150" width="200" height="24" rx="4"/><text class="sm on-p" x="384" y="167" text-anchor="middle">我们去公园吧！👨‍👩‍👧</text>
+  <text class="sm" x="20" y="200">虚线框是 isWordLike 为 false 的片段（标点、空格），统计词数时应排除</text>
+</svg>
+<figcaption>图 11-6　三种粒度：字形、词、句</figcaption>
+</figure>
+
+<p>
+  你可能以前用 <code>text.split(' ')</code> 统计单词，用 <code>text.length</code> 统计字符。这两种做法在很多语言里都是错的：
+  中文、日文、泰文没有空格分词；emoji 和带声调的字符会被 <code>length</code> 数成多个 UTF-16 码元。
+  <code>Segmenter</code> 按照该语言的真实规则切分。<span class="bl newly">Baseline 2024</span>（书写作时 Firefox 尚不支持，现已全面可用）
+</p>
+
+<div class="demo">
+  <div class="h">试一试：Intl.Segmenter 计数器</div>
+  <div class="b">
+    <textarea id="seg-text" rows="3" style="width:100%">Hello, world! How are you? 今天天气很好。我们去公园吧！👨‍👩‍👧</textarea>
+    <div class="out" id="seg-out"></div>
+  </div>
+</div>
+
+<h2 id="r11-10"><span class="rn">11.10</span>格式化列表</h2>
+
+<p class="prob">把数组显示成符合语言习惯的列表，如「user1, user2, and user3」。</p>
+
+<div class="code" data-lang="js" data-file="11-16-format-list.js">
+<script type="text/plain">
+function getUserListString(users, locale = 'en-US') {
+  const listFormat = new Intl.ListFormat(locale);
+  return listFormat.format(users.map(user => user.username));
+}
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>人数</th><th>en-US</th><th>de-DE</th><th>zh-CN</th></tr>
+  <tr><td>1</td><td>user1</td><td>user1</td><td>张三</td></tr>
+  <tr><td>2</td><td>user1 and user2</td><td>user1 und user2</td><td>张三和李四</td></tr>
+  <tr><td>3</td><td>user1, user2, and user3</td><td>user1, user2 und user3</td><td>张三、李四和王五</td></tr>
+</table>
+</div>
+
+<p>
+  英语有「牛津逗号」（and 前面的逗号），德语没有；中文用顿号「、」。<code>array.join(', ')</code> 处理不了这些差异。
+  设置 <code>{ type: 'disjunction' }</code> 可以得到「或」的列表：<code>A、B或C</code>。
+</p>
+
+<h2 id="r11-11"><span class="rn">11.11</span>对姓名数组排序</h2>
+
+<p class="prob">按照语言规则对一组姓名排序。</p>
+
+<div class="code" data-lang="js" data-file="11-17-sort-collator.js">
+<script type="text/plain">
+const names = ['Elena', 'Mário', 'André', 'Renée', 'Léo', 'Olga', 'Héctor'];
+
+const collator = new Intl.Collator();
+names.sort(collator.compare);
+</script>
+</div>
+
+<p>
+  <code>compare(a, b)</code> 返回负数表示 a 在前、0 表示相等、正数表示 a 在后（不一定正好是 -1 或 1）。
+  为什么不直接用 <code>sort()</code>？因为默认排序比较的是 UTF-16 码元，大写字母全排在小写前面，带重音的字母被扔到最后：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="默认排序与 Collator 排序的对比">
+  <text class="mono" x="20" y="30">输入：['zebra', 'Ärger', 'apple', 'Zoo', 'éclair', 'Eagle']</text>
+  <rect class="bx-r" x="20" y="46" width="720" height="36" rx="8"/>
+  <text class="mono on-r" x="36" y="69">.sort()             Eagle, Zoo, apple, zebra, Ärger, éclair</text>
+  <rect class="bx-g" x="20" y="92" width="720" height="36" rx="8"/>
+  <text class="mono on-g" x="36" y="115">Collator('de')      apple, Ärger, Eagle, éclair, zebra, Zoo</text>
+  <text class="sm" x="380" y="146" text-anchor="middle">中文：new Intl.Collator('zh-CN') 按拼音排序（阿明、李四、王五、张三、赵六）；'zh-CN-u-co-stroke' 按笔画</text>
+</svg>
+<figcaption>图 11-7　默认的 sort() 按编码排序，Collator 按语言习惯排序</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="11-18-sort-directly.js">
+<script type="text/plain">
+names.sort((a, b) => a.localeCompare(b));
+
+// localeCompare 其实也可以指定 locale 和选项（原书说「不能指定」并不准确）
+names.sort((a, b) => a.localeCompare(b, 'de', { sensitivity: 'base' }));
+</script>
+</div>
+
+<p>
+  两者背后是同一套算法。区别在于：<code>localeCompare</code> 每次调用都要重新准备排序规则，
+  排序大数组时，预先创建一个 <code>Collator</code> 反复使用<strong>快得多</strong>。
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>Collator 选项</th><th>作用</th><th>示例</th></tr>
+  <tr><td><code>numeric: true</code></td><td>数字按数值比较</td><td><code>['1','2','20','3']</code> → <code>['1','2','3','20']</code>（文件名排序必备）</td></tr>
+  <tr><td><code>sensitivity: 'base'</code></td><td>忽略大小写和重音</td><td><code>'a'</code>、<code>'A'</code>、<code>'á'</code> 视为相等（适合搜索匹配）</td></tr>
+  <tr><td><code>caseFirst: 'upper'</code></td><td>大写字母排在前</td><td><code>'A'</code> 在 <code>'a'</code> 之前</td></tr>
+</table>
+</div>
+
+<h2 id="modern">现代补充：DurationFormat、DisplayNames 与 Temporal</h2>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 1. 时长格式化（Baseline 2025）
+new Intl.DurationFormat('zh-CN', { style: 'long' }).format({ hours: 1, minutes: 30 });
+// '1小时30分钟'
+new Intl.DurationFormat('en', { style: 'digital' }).format({ hours: 1, minutes: 30, seconds: 5 });
+// '1:30:05'
+
+// 2. 语言、地区、货币的显示名称（Baseline 广泛可用）
+new Intl.DisplayNames(['zh-CN'], { type: 'language' }).of('en-US');   // '美国英语'
+new Intl.DisplayNames(['zh-CN'], { type: 'region' }).of('JP');        // '日本'
+new Intl.DisplayNames(['zh-CN'], { type: 'currency' }).of('EUR');     // '欧元'
+// 做语言切换菜单时，再也不用自己维护一张「语言名称表」
+</script>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; Temporal：新一代日期时间 API</div>
+  <p>
+    书中提到的 <code>Temporal</code> 提案已进入标准化的最后阶段，Firefox 139 率先发布，Chromium 随后跟进，Safari 仍在开发中。<span class="bl limited">有限支持</span>
+    它修正了 <code>Date</code> 的一堆历史包袱：月份从 1 开始、对象不可变、区分「纯日期」「带时区的时间」等不同概念、内置时区和日期运算：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const today = Temporal.Now.plainDateISO();                 // 2026-09-27（只有日期，没有时间和时区）
+const birthday = Temporal.PlainDate.from('2025-06-02');    // 月份就是 6，不用减 1
+today.since(birthday).toString();                          // 'P482D'（ISO 8601 时长：482 天）
+today.add({ months: 1 });                                  // 返回新对象，不修改原对象
+
+const meeting = Temporal.ZonedDateTime.from('2026-10-01T09:00[Asia/Shanghai]');
+meeting.withTimeZone('America/New_York').toLocaleString('zh-CN');
+</script>
+  </div>
+  <p>在它全面可用之前，可以通过官方 polyfill（<code>@js-temporal/polyfill</code>）提前使用。</p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>Intl API 以 locale 为输入：<code>navigator.language</code> 获取用户语言；不传则用浏览器默认值。</li>
+  <li><code>DateTimeFormat</code>（<code>dateStyle / timeStyle / timeZone</code>）、<code>formatToParts</code> 分段；<code>RelativeTimeFormat</code> 只负责翻译「数值 + 单位」，差值要自己算。</li>
+  <li><code>NumberFormat</code> 一个对象搞定数字、货币、百分比、单位、紧凑写法和区间。</li>
+  <li><code>PluralRules</code> 返回类别名，文案按类别准备；<code>ListFormat</code> 处理连接词；<code>Collator</code> 负责排序并支持数字排序。</li>
+  <li><code>Segmenter</code> 按语言规则切分字、词、句，统计词数时过滤 <code>isWordLike</code>。</li>
+  <li>格式器对象创建一次反复使用；新项目可以关注 <code>DurationFormat</code> 与 <code>Temporal</code>。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个「消息列表」：每条消息显示相对时间（刚刚 / 5分钟前 / 昨天），鼠标悬停时用 <code>title</code> 显示完整的本地化日期时间。</li>
+    <li>做一个购物车合计：金额用 <code>Intl.NumberFormat</code> 按 <code>CNY</code>、<code>USD</code>、<code>EUR</code> 切换显示，数量文案用 <code>PluralRules</code> 处理英文单复数。</li>
+    <li>写一个文件列表排序：文件名如 <code>第2章.md</code>、<code>第10章.md</code>、<code>第1章.md</code>，要求按章节数字从小到大排列。</li>
+    <li>做一个中英文混合的「字数统计」工具：分别统计汉字字数、英文单词数、句子数、emoji 数。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  document.getElementById('nav-lang').textContent = navigator.language;
+  var sel = document.getElementById('loc'), out = document.getElementById('loc-out');
+  function run() {
+    var L = sel.value, d = new Date(), lines = [];
+    function add(label, fn) { try { lines.push(label.padEnd(24, ' ') + fn()); } catch (e) { lines.push(label.padEnd(24, ' ') + '（不支持：' + e.message + '）'); } }
+    add('DateTimeFormat full', function () { return new Intl.DateTimeFormat(L, { dateStyle: 'full', timeStyle: 'short' }).format(d); });
+    add('DateTimeFormat short', function () { return new Intl.DateTimeFormat(L, { dateStyle: 'short' }).format(d); });
+    add('RelativeTimeFormat', function () { var r = new Intl.RelativeTimeFormat(L, { numeric: 'auto' }); return [r.format(-1, 'day'), r.format(-3, 'month'), r.format(2, 'year')].join(' | '); });
+    add('NumberFormat', function () { return new Intl.NumberFormat(L).format(1234567.891); });
+    add('compact', function () { return new Intl.NumberFormat(L, { notation: 'compact' }).format(123456789); });
+    add('currency CNY', function () { return new Intl.NumberFormat(L, { style: 'currency', currency: 'CNY' }).format(1234.5); });
+    add('currency range USD', function () { return new Intl.NumberFormat(L, { style: 'currency', currency: 'USD' }).formatRange(1.75, 11); });
+    add('unit long', function () { return new Intl.NumberFormat(L, { style: 'unit', unit: 'kilometer-per-hour', unitDisplay: 'long' }).format(88); });
+    add('PluralRules categories', function () { return new Intl.PluralRules(L).resolvedOptions().pluralCategories.join(', '); });
+    add('ListFormat', function () { return new Intl.ListFormat(L).format(['A', 'B', 'C']); });
+    add('DisplayNames (lang)', function () { return new Intl.DisplayNames([L], { type: 'language' }).of('zh-CN'); });
+    add('DurationFormat', function () { return new Intl.DurationFormat(L, { style: 'long' }).format({ hours: 1, minutes: 30 }); });
+    out.textContent = lines.join('\n');
+  }
+  sel.addEventListener('change', run); run();
+
+  var ta = document.getElementById('seg-text'), so = document.getElementById('seg-out');
+  function seg() {
+    var t = ta.value;
+    if (!Intl.Segmenter) { so.textContent = '你的浏览器不支持 Intl.Segmenter'; return; }
+    var g = Array.from(new Intl.Segmenter(navigator.language, { granularity: 'grapheme' }).segment(t));
+    var w = Array.from(new Intl.Segmenter(navigator.language, { granularity: 'word' }).segment(t));
+    var s = Array.from(new Intl.Segmenter(navigator.language, { granularity: 'sentence' }).segment(t));
+    var words = w.filter(function (x) { return x.isWordLike; });
+    so.textContent =
+      'text.length（UTF-16 码元）  = ' + t.length + '\n' +
+      '字形 grapheme               = ' + g.length + '\n' +
+      'word 片段总数（原书写法）    = ' + w.length + '\n' +
+      'word 中 isWordLike 的个数    = ' + words.length + '\n' +
+      '句子 sentence               = ' + s.length + '\n\n' +
+      '词：' + words.map(function (x) { return x.segment; }).join(' / ');
+  }
+  ta.addEventListener('input', seg); seg();
+})();
+</script>
+</body>
+</html>

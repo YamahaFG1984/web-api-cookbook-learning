@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 2 章 · Web Storage 简单持久化 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="2">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 2 章</span>
+<h1>用 Web Storage 做简单持久化</h1>
+<p class="lede">
+  刷新页面后，JavaScript 变量就全没了。想让「用户选过的主题色」「表单里填了一半的内容」在下次打开时还在，
+  最简单的办法是 <code>localStorage</code>：一个浏览器自带的、按键存字符串的小仓库。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解 <code>localStorage</code> 与 <code>sessionStorage</code> 的区别，以及「源（origin）」的概念</li>
+    <li>安全地检测存储是否可用，读写字符串数据</li>
+    <li>用 <code>JSON.stringify / parse</code> 存对象，用 replacer / reviver 处理 <code>Date</code> 等复杂类型</li>
+    <li>用 <code>storage</code> 事件在多个标签页之间同步数据</li>
+    <li>列出、查询、删除数据，并了解容量上限、隐私限制等现代注意事项</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">Web Storage 是什么</h2>
+
+<p>
+  Web Storage API 提供了一个 <code>Storage</code> 接口。你不需要自己创建它，浏览器已经准备好了两个全局实例：
+</p>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128451;</span><h4>localStorage</h4><p>同一个源下<strong>所有标签页共享</strong>，关掉浏览器再打开数据<strong>依然在</strong>，直到被代码或用户清除。</p></div>
+  <div class="card"><span class="ic">&#128196;</span><h4>sessionStorage</h4><p>只属于<strong>当前这个标签页</strong>，刷新页面还在，<strong>关掉标签页就没了</strong>。适合临时或敏感数据。</p></div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="localStorage 被同源所有标签页共享，sessionStorage 每个标签页独立">
+  <rect class="bx-d" x="20" y="16" width="720" height="240" rx="12"/>
+  <text class="sm" x="36" y="38">浏览器 · 源 https://example.com</text>
+
+  <rect class="bx" x="50" y="54" width="190" height="112" rx="10"/>
+  <text class="ttl" x="145" y="76" text-anchor="middle">标签页 A</text>
+  <rect class="bx-b" x="70" y="90" width="150" height="56" rx="8"/>
+  <text class="lbl on-b" x="145" y="113" text-anchor="middle">sessionStorage</text>
+  <text class="sm" x="145" y="131" text-anchor="middle">A 专属</text>
+
+  <rect class="bx" x="285" y="54" width="190" height="112" rx="10"/>
+  <text class="ttl" x="380" y="76" text-anchor="middle">标签页 B</text>
+  <rect class="bx-b" x="305" y="90" width="150" height="56" rx="8"/>
+  <text class="lbl on-b" x="380" y="113" text-anchor="middle">sessionStorage</text>
+  <text class="sm" x="380" y="131" text-anchor="middle">B 专属</text>
+
+  <rect class="bx" x="520" y="54" width="190" height="112" rx="10"/>
+  <text class="ttl" x="615" y="76" text-anchor="middle">标签页 C</text>
+  <rect class="bx-b" x="540" y="90" width="150" height="56" rx="8"/>
+  <text class="lbl on-b" x="615" y="113" text-anchor="middle">sessionStorage</text>
+  <text class="sm" x="615" y="131" text-anchor="middle">C 专属</text>
+
+  <rect class="bx-a" x="50" y="196" width="660" height="44" rx="10"/>
+  <text class="ttl on-a" x="380" y="223" text-anchor="middle">localStorage —— 同源的所有标签页共用一份，关闭浏览器也保留</text>
+  <path class="ln-a" d="M145 168 V192" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M380 168 V192" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M615 168 V192" marker-end="url(#ar-a)"/>
+</svg>
+<figcaption>图 2-1　两种存储的共享范围</figcaption>
+</figure>
+
+<h3>什么是「源」（origin）</h3>
+
+<p>
+  存储空间是<strong>按源隔离</strong>的：<code>a.com</code> 的页面读不到 <code>b.com</code> 存的东西。
+  一个 URL 的源由三部分组成：<strong>协议 + 主机名 + 端口</strong>。路径、查询参数、锚点都不算。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="URL 的源由协议、主机和端口组成">
+  <text class="mono" x="40" y="60" style="font-size:20px"><tspan class="on-b">https://</tspan><tspan class="on-g">shop.example.com</tspan><tspan class="on-p">:443</tspan><tspan style="fill:var(--fg-faint)">/cart/items?id=7#top</tspan></text>
+  <path class="ln-b" d="M42 72 H130"/>
+  <text class="sm on-b" x="86" y="92" text-anchor="middle">协议</text>
+  <path class="ln-g" d="M136 72 H330"/>
+  <text class="sm on-g" x="233" y="92" text-anchor="middle">主机名</text>
+  <path class="ln-p" d="M336 72 H378"/>
+  <text class="sm on-p" x="357" y="92" text-anchor="middle">端口</text>
+  <path class="ln-d" d="M384 72 H620"/>
+  <text class="sm" x="500" y="92" text-anchor="middle">路径 / 查询 / 锚点：与源无关</text>
+  <rect class="bx-a" x="40" y="108" width="340" height="30" rx="6"/>
+  <text class="lbl on-a" x="210" y="128" text-anchor="middle">源 = https://shop.example.com（443 是默认端口可省略）</text>
+</svg>
+<figcaption>图 2-2　源 = 协议 + 主机 + 端口</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>和 <code>https://example.com/a.html</code> 比较</th><th>同源吗？</th><th>原因</th></tr>
+  <tr><td><code>https://example.com/b/c.html</code></td><td>✅ 是</td><td>只有路径不同</td></tr>
+  <tr><td><code>http://example.com/a.html</code></td><td>❌ 否</td><td>协议不同</td></tr>
+  <tr><td><code>https://www.example.com/a.html</code></td><td>❌ 否</td><td>主机名不同（子域名也算不同）</td></tr>
+  <tr><td><code>https://example.com:8080/a.html</code></td><td>❌ 否</td><td>端口不同</td></tr>
+</table>
+</div>
+
+<h3>API 一览</h3>
+
+<dl class="terms">
+  <dt>getItem(key)</dt><dd>读取 key 对应的字符串；key 不存在时返回 <code>null</code></dd>
+  <dt>setItem(key, value)</dt><dd>存一个字符串；key 已存在则覆盖</dd>
+  <dt>removeItem(key)</dt><dd>删除一项；key 不存在也不会报错</dd>
+  <dt>clear()</dt><dd>清空当前源的全部数据</dd>
+  <dt>key(index)</dt><dd>返回第 index 个 key 的名字</dd>
+  <dt>length</dt><dd>当前存了多少个 key</dd>
+</dl>
+
+<h3>三个局限</h3>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128292;</span><h4>只能存字符串</h4><p>数字、布尔、对象都会被转成字符串。存对象要先转 JSON。</p></div>
+  <div class="card"><span class="ic">&#128230;</span><h4>容量小</h4><p>每个源通常约 5 MB。满了再写会抛出 <code>QuotaExceededError</code>。</p></div>
+  <div class="card"><span class="ic">&#128275;</span><h4>不安全</h4><p>页面上任何 JS 都能读。一旦遭遇 XSS 攻击，里面的东西会被偷走。<strong>不要存密码和令牌</strong>。</p></div>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 它是同步 API</div>
+  <p>
+    <code>localStorage.getItem</code> 会在主线程上同步读取磁盘数据，数据量大时会拖慢页面。
+    所以它只适合存<strong>少量、简单</strong>的设置类数据。大量或结构化数据请用第 5 章的 IndexedDB。
+  </p>
+</div>
+
+<p>本章的例子都用 <code>localStorage</code>，但它们同样适用于 <code>sessionStorage</code>，因为两者实现的是同一个 <code>Storage</code> 接口。</p>
+
+<h2 id="r2-1"><span class="rn">2.1</span>检测 Web Storage 是否可用</h2>
+
+<p class="prob">使用前先确认 localStorage 可用，避免程序崩溃；还要处理「浏览器支持，但被用户设置禁用了」的情况。</p>
+
+<div class="code" data-lang="js" data-file="2-01-check-if-available.js">
+<script type="text/plain">
+/**
+ * 判断 localStorage 是否可用
+ * @returns 可用返回 true，否则 false
+ */
+function isLocalStorageAvailable() {
+  try {
+    // 属性存在，说明浏览器支持
+    return typeof window.localStorage !== 'undefined';
+  } catch (error) {
+    // 如果用户禁用了存储，光是「读取」 window.localStorage 这个属性就会抛异常
+    return false;
+  }
+}
+</script>
+</div>
+
+<p>
+  注意 <code>try/catch</code> 的作用：在一些浏览器里，用户禁用了网站数据（比如 Chrome 设置里「阻止所有 Cookie」）后，
+  仅仅<strong>访问</strong> <code>window.localStorage</code> 属性就会抛出 <code>SecurityError</code>。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 更彻底的检测：真的写一次</div>
+  <p>
+    属性存在也不代表能写入 —— 比如存储已满。MDN 推荐的做法是真的写一个测试值再删掉：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+function storageAvailable(type = 'localStorage') {
+  try {
+    const storage = window[type];
+    const testKey = '__storage_test__';
+    storage.setItem(testKey, testKey);
+    storage.removeItem(testKey);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+</script>
+  </div>
+</div>
+
+<h2 id="r2-2"><span class="rn">2.2</span>持久化字符串数据</h2>
+
+<p class="prob">你想把一个字符串存到 localStorage，下次打开页面时再读回来。</p>
+
+<p>以一个颜色选择器为例：用户选了颜色就存起来，下次打开页面自动恢复。</p>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<input type="color" id="colorPicker">
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="2-02-color-picker-persist.js">
+<script type="text/plain">
+const colorPicker = document.querySelector('#colorPicker');
+
+// 页面加载时：读取保存过的颜色（如果有的话）
+const storedValue = localStorage.getItem('savedColor');
+if (storedValue) {
+  console.log('Found saved color:', storedValue);
+  colorPicker.value = storedValue;
+}
+
+// 颜色变化时：保存新值（会覆盖旧值）
+colorPicker.addEventListener('change', event => {
+  localStorage.setItem('savedColor', event.target.value);
+  console.log('Saving new color:', colorPicker.value);
+});
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：选个颜色，然后刷新页面</div>
+  <div class="b">
+    <div class="row">
+      <input type="color" id="demo-color" value="#d95602">
+      <span id="demo-color-msg" class="hint"></span>
+    </div>
+    <p class="hint">颜色保存在本站的 localStorage 里，键名 <code>demo-savedColor</code>。再开一个标签页打开本页，改颜色试试 —— 另一个标签页会通过 2.5 节的 <code>storage</code> 事件同步更新。</p>
+  </div>
+</div>
+
+<h2 id="r2-3"><span class="rn">2.3</span>持久化简单对象</h2>
+
+<p class="prob">你想把一个对象（比如用户资料）存进 localStorage，但它只能存字符串。</p>
+
+<p>先看看直接存会怎样：</p>
+
+<div class="code" data-lang="js" data-file="2-04-persist-object-incorrect.js">
+<script type="text/plain">
+const userProfile = {
+  firstName: 'Ava',
+  lastName: 'Johnson'
+};
+
+localStorage.setItem('userProfile', userProfile);
+
+// 打印出 [object Object] —— 数据丢了！
+console.log(localStorage.getItem('userProfile'));
+</script>
+</div>
+
+<p>
+  <code>setItem</code> 会对值调用 <code>toString()</code>，而普通对象的 <code>toString()</code> 就是固定的
+  <code>"[object Object]"</code>。正确做法是用 <strong>JSON</strong> 作为中间格式：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="对象经 JSON.stringify 转为字符串存入，读出后经 JSON.parse 还原">
+  <rect class="bx-b" x="20" y="30" width="180" height="70" rx="10"/>
+  <text class="ttl on-b" x="110" y="54" text-anchor="middle">JS 对象</text>
+  <text class="mono" x="110" y="78" text-anchor="middle">{ firstName: 'Ava' }</text>
+
+  <path class="ln-g" d="M202 55 H300" marker-end="url(#ar-g)"/>
+  <text class="mono on-g" x="251" y="46" text-anchor="middle">stringify</text>
+
+  <rect class="bx" x="304" y="30" width="200" height="70" rx="10"/>
+  <text class="ttl" x="404" y="54" text-anchor="middle">JSON 字符串</text>
+  <text class="mono" x="404" y="78" text-anchor="middle">'{"firstName":"Ava"}'</text>
+
+  <path class="ln-g" d="M506 55 H580" marker-end="url(#ar-g)"/>
+  <text class="mono on-g" x="543" y="46" text-anchor="middle">setItem</text>
+
+  <rect class="bx-a" x="584" y="30" width="156" height="150" rx="10"/>
+  <text class="ttl on-a" x="662" y="54" text-anchor="middle">localStorage</text>
+  <text class="sm" x="662" y="74" text-anchor="middle">只认字符串</text>
+  <text class="mono" x="662" y="110" text-anchor="middle">userProfile →</text>
+  <text class="mono" x="662" y="128" text-anchor="middle">'{"firstName"…}'</text>
+
+  <path class="ln-b" d="M580 150 H506" marker-end="url(#ar-b)"/>
+  <text class="mono on-b" x="543" y="170" text-anchor="middle">getItem</text>
+  <rect class="bx" x="304" y="125" width="200" height="50" rx="10"/>
+  <text class="mono" x="404" y="155" text-anchor="middle">'{"firstName":"Ava"}'</text>
+  <path class="ln-b" d="M302 150 H202" marker-end="url(#ar-b)"/>
+  <text class="mono on-b" x="251" y="170" text-anchor="middle">parse</text>
+  <rect class="bx-b" x="20" y="125" width="180" height="50" rx="10"/>
+  <text class="mono" x="110" y="155" text-anchor="middle">{ firstName: 'Ava' }</text>
+</svg>
+<figcaption>图 2-3　JSON 是对象与字符串之间的「翻译官」</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="2-03-json-parse-and-stringify.js">
+<script type="text/plain">
+/** 把用户资料对象序列化为 JSON 并存入 localStorage */
+function saveProfile(userProfile) {
+  localStorage.setItem('userProfile', JSON.stringify(userProfile));
+}
+
+/**
+ * 从 localStorage 读出并反序列化。没有存过则返回空对象。
+ */
+function loadProfile() {
+  // getItem 返回 null 时，JSON.parse(null) 得到 null，于是 || 给出默认值 {}
+  return JSON.parse(localStorage.getItem('userProfile')) || {};
+}
+</script>
+</div>
+
+<p>
+  JSON 能表示的只有：<strong>对象、数组、字符串、数字、布尔值和 <code>null</code></strong>。
+  函数、<code>undefined</code>、<code>Symbol</code>、类实例的「身份」、<code>Map</code>、<code>Set</code>、<code>Date</code> 都会出问题：
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>原始值</th><th><code>JSON.stringify</code> 后</th><th><code>JSON.parse</code> 回来</th></tr>
+  <tr><td><code>new Date()</code></td><td><code>"2025-06-02T04:00:00.000Z"</code></td><td>一个<strong>字符串</strong>，不再是 Date</td></tr>
+  <tr><td><code>new Map([['a', 1]])</code></td><td><code>{}</code></td><td>空对象，数据全丢</td></tr>
+  <tr><td><code>new Set([1, 2])</code></td><td><code>{}</code></td><td>空对象</td></tr>
+  <tr><td><code>{ fn() {} }</code></td><td><code>{}</code></td><td>函数被静默丢弃</td></tr>
+  <tr><td><code>{ x: undefined }</code></td><td><code>{}</code></td><td>这个键消失了</td></tr>
+  <tr><td><code>NaN</code>、<code>Infinity</code></td><td><code>null</code></td><td><code>null</code></td></tr>
+</table>
+</div>
+
+<h2 id="r2-4"><span class="rn">2.4</span>持久化复杂对象</h2>
+
+<p class="prob">你要存的对象里有 JSON 无法直接表示的值，比如记录「最后更新时间」的 <code>Date</code>。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const userProfile = {
+  firstName: 'Ava',
+  lastName: 'Johnson',
+  // 2025 年 6 月 2 日。注意：月份从 0 开始，日期从 1 开始
+  lastUpdated: new Date(2025, 5, 2)
+};
+
+const json = JSON.stringify(userProfile);
+// {"firstName":"Ava","lastName":"Johnson","lastUpdated":"2025-06-02T04:00:00.000Z"}
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 为什么是 04:00:00Z？</div>
+  <p>
+    <code>new Date(2025, 5, 2)</code> 表示<strong>本地时间</strong>6 月 2 日零点。作者在美国东部（夏令时 UTC−4），
+    换算成 UTC 就是 04:00。如果你在北京（UTC+8），输出会是 <code>2025-06-01T16:00:00.000Z</code>。
+    末尾的 <code>Z</code> 代表 UTC。第 11 章会详细讲时区。
+  </p>
+</div>
+
+<p>
+  序列化没问题，但 <code>JSON.parse</code> 回来后 <code>lastUpdated</code> 是个字符串，<code>.getFullYear()</code> 之类的方法都用不了。
+  解决办法是给这两个函数传「钩子」：<code>JSON.stringify</code> 的第二个参数叫 <strong>replacer</strong>，
+  <code>JSON.parse</code> 的第二个参数叫 <strong>reviver</strong>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="replacer 把 Date 转成时间戳，reviver 把时间戳还原成 Date">
+  <rect class="bx-b" x="20" y="60" width="170" height="80" rx="10"/>
+  <text class="ttl on-b" x="105" y="84" text-anchor="middle">lastUpdated</text>
+  <text class="mono" x="105" y="108" text-anchor="middle">Date 对象</text>
+  <text class="sm" x="105" y="126" text-anchor="middle">有 getFullYear() 等方法</text>
+
+  <rect class="bx-a" x="240" y="30" width="130" height="40" rx="8"/>
+  <text class="mono on-a" x="305" y="55" text-anchor="middle">replacer</text>
+  <path class="ln-a" d="M192 80 C 215 60, 225 50, 238 50" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M372 50 C 390 50, 400 60, 418 80" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="305" y="20" text-anchor="middle">value.getTime()</text>
+
+  <rect class="bx" x="420" y="60" width="150" height="80" rx="10"/>
+  <text class="ttl" x="495" y="84" text-anchor="middle">JSON 中</text>
+  <text class="mono" x="495" y="108" text-anchor="middle">1748836800000</text>
+  <text class="sm" x="495" y="126" text-anchor="middle">一个普通数字</text>
+
+  <rect class="bx-g" x="240" y="140" width="130" height="40" rx="8"/>
+  <text class="mono on-g" x="305" y="165" text-anchor="middle">reviver</text>
+  <path class="ln-g" d="M418 120 C 400 140, 390 160, 372 160" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M238 160 C 225 160, 215 140, 192 120" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="305" y="196" text-anchor="middle">new Date(value)</text>
+
+  <rect class="bx-d" x="600" y="60" width="140" height="80" rx="10"/>
+  <text class="sm" x="670" y="86" text-anchor="middle">时间戳 = 距离</text>
+  <text class="sm" x="670" y="104" text-anchor="middle">1970-01-01 00:00 UTC</text>
+  <text class="sm" x="670" y="122" text-anchor="middle">的毫秒数</text>
+</svg>
+<figcaption>图 2-4　replacer 负责「打包」，reviver 负责「拆包」</figcaption>
+</figure>
+
+<h3>用 replacer 序列化</h3>
+
+<p>
+  <code>JSON.stringify</code> 会先以<strong>空字符串 <code>''</code> 作为 key</strong>、整个对象作为 value 调用一次 replacer，
+  然后再对每个属性各调用一次。我们在第一次调用时把 <code>lastUpdated</code> 换成时间戳：
+</p>
+
+<div class="code" data-lang="js" data-file="2-06-json-replacer.js">
+<script type="text/plain">
+function replacer(key, value) {
+  if (key === '') {
+    // 第一次调用，value 是整个对象本身。
+    // 用展开语法复制一份，再覆盖 lastUpdated
+    return {
+      ...value,
+      lastUpdated: value.lastUpdated.getTime()
+    };
+  }
+
+  // 之后每个键值对各调用一次，不需要再改，原样返回
+  return value;
+}
+
+const json = JSON.stringify(userProfile, replacer);
+// {"firstName":"Ava","lastName":"Johnson","lastUpdated":1748836800000}
+</script>
+</div>
+
+<div class="box deep">
+  <div class="t">&#128270; 深入：为什么不在 key === 'lastUpdated' 时转换？</div>
+  <p>
+    直觉上可以写 <code>if (key === 'lastUpdated') return value.getTime()</code>，但这样行不通：
+    <code>Date</code> 自带 <code>toJSON()</code> 方法，<code>JSON.stringify</code> 在调用 replacer <strong>之前</strong>就已经把它转成了 ISO 字符串，
+    所以 replacer 收到的 <code>value</code> 是字符串，没有 <code>getTime</code>。
+    在 <code>key === ''</code> 那一步处理，拿到的还是原始的 Date 对象。另一个办法是用 <code>this[key]</code> 读取原始值。
+  </p>
+</div>
+
+<h3>用 reviver 反序列化</h3>
+
+<p><code>JSON.parse</code> 会对每个键值对调用 reviver，返回值就是最终对象里该属性的值：</p>
+
+<div class="code" data-lang="js" data-file="2-08-json-reviver.js">
+<script type="text/plain">
+function reviver(key, value) {
+  // 遇到 lastUpdated 且有值时，把时间戳还原为 Date
+  if (key === 'lastUpdated' && value) {
+    return new Date(value);
+  }
+
+  // 其他值原样保留
+  return value;
+}
+
+// 注意：parse 的是 JSON 字符串 json，不是对象 userProfile
+const object = JSON.parse(json, reviver);
+// { firstName: 'Ava', lastName: 'Johnson', lastUpdated: Date(2025-06-02) }
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 原书示例 2-9 的笔误</div>
+  <p>
+    原书写的是 <code>JSON.parse(userProfile, reviver)</code>，但 <code>userProfile</code> 是对象不是字符串。
+    应当传入前面 <code>JSON.stringify</code> 得到的 <code>json</code>，上面已更正。
+  </p>
+</div>
+
+<h3>另一种方式：toJSON</h3>
+
+<p>
+  如果对象上定义了 <code>toJSON()</code> 方法，<code>JSON.stringify</code> 会用它的返回值代替对象本身。
+  配合<strong>工厂函数</strong>（一个直接调用、返回新对象的普通函数，类似构造函数但不用 <code>new</code>）就不需要 replacer：
+</p>
+
+<div class="code" data-lang="js" data-file="2-10-to-json.js">
+<script type="text/plain">
+/**
+ * 工厂函数：创建用户资料对象，lastUpdated 为当前时间，并带有 toJSON 方法
+ */
+function createUser(firstName, lastName) {
+  return {
+    firstName,
+    lastName,
+    lastUpdated: new Date(),
+    toJSON() {
+      return {
+        firstName: this.firstName,
+        lastName: this.lastName,
+        lastUpdated: this.lastUpdated.getTime()   // 原书这里多了分号且键名拼错，已更正
+      };
+    }
+  };
+}
+
+const userProfile = createUser('Ava', 'Johnson');
+JSON.stringify(userProfile);  // 与 replacer 方案输出相同；函数不会被序列化
+</script>
+</div>
+
+<p>
+  <code>toJSON</code> 只管「打包」。<code>JSON.parse</code> 没有对应的「自动拆包」机制，所以<strong>读回来时仍然需要 reviver</strong>。
+</p>
+
+<div class="box new">
+  <div class="t">&#10024; 需要存 Map、Set、Date、二进制？考虑 IndexedDB</div>
+  <p>
+    IndexedDB（第 5 章）使用<strong>结构化克隆算法</strong>存储数据，<code>Date</code>、<code>Map</code>、<code>Set</code>、
+    <code>ArrayBuffer</code>、<code>Blob</code> 都能原样存取，不需要任何 replacer / reviver。
+    同一个算法也可以通过全局函数 <code>structuredClone(obj)</code> 用来<strong>深拷贝</strong>对象。<span class="bl wide">Baseline 广泛可用</span>
+  </p>
+</div>
+
+<h2 id="r2-5"><span class="rn">2.5</span>监听存储变化</h2>
+
+<p class="prob">同一个源在另一个标签页修改了 localStorage，你想在当前页面收到通知。</p>
+
+<div class="code" data-lang="js" data-file="2-11-storage-event.js">
+<script type="text/plain">
+// 另一个标签页改了 savedColor，就同步更新本页的颜色选择器
+window.addEventListener('storage', event => {
+  if (event.key === 'savedColor') {
+    console.log('New color was chosen in another tab:', event.newValue);
+    colorPicker.value = event.newValue;
+  }
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="storage 事件只在其他标签页触发">
+  <rect class="bx-b" x="20" y="40" width="200" height="120" rx="10"/>
+  <text class="ttl on-b" x="120" y="64" text-anchor="middle">标签页 A（修改者）</text>
+  <text class="mono" x="120" y="96" text-anchor="middle">setItem('savedColor',</text>
+  <text class="mono" x="120" y="114" text-anchor="middle">'#ff0000')</text>
+  <text class="sm on-r" x="120" y="145" text-anchor="middle">✗ 自己不会收到事件</text>
+
+  <path class="ln-b" d="M222 100 H290" marker-end="url(#ar-b)"/>
+  <rect class="bx-a" x="294" y="70" width="160" height="60" rx="10"/>
+  <text class="ttl on-a" x="374" y="96" text-anchor="middle">localStorage</text>
+  <text class="sm" x="374" y="114" text-anchor="middle">数据已更新</text>
+
+  <path class="ln-g" d="M456 90 L530 56" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M456 110 L530 144" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="480" y="100">storage 事件</text>
+
+  <rect class="bx-g" x="534" y="20" width="206" height="72" rx="10"/>
+  <text class="ttl on-g" x="637" y="44" text-anchor="middle">标签页 B</text>
+  <text class="sm" x="637" y="64" text-anchor="middle">event.key = 'savedColor'</text>
+  <text class="sm" x="637" y="80" text-anchor="middle">oldValue / newValue / url</text>
+  <rect class="bx-g" x="534" y="108" width="206" height="72" rx="10"/>
+  <text class="ttl on-g" x="637" y="132" text-anchor="middle">标签页 C</text>
+  <text class="sm" x="637" y="152" text-anchor="middle">同样收到通知</text>
+</svg>
+<figcaption>图 2-5　storage 事件是「广播给别人」的，修改者本身不会收到</figcaption>
+</figure>
+
+<p>
+  事件对象带有 <code>key</code>（改了哪个键）、<code>oldValue</code>、<code>newValue</code>、<code>url</code>（哪个页面改的）和 <code>storageArea</code>。
+  如果是 <code>clear()</code> 触发的，<code>key</code> 为 <code>null</code>。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; 两个容易误解的点</div>
+  <ul>
+    <li>事件<strong>只在同一个浏览器、同一台设备</strong>的其他标签页触发，不会跨设备同步。</li>
+    <li>即使不监听事件，所有标签页读到的也永远是最新值。事件只是「实时提醒你数据变了」，让页面可以立刻刷新界面。</li>
+  </ul>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 标签页之间只想「发消息」？用 BroadcastChannel</div>
+  <p>
+    如果你并不需要持久化，只是想通知其他标签页（比如「用户已退出登录」），
+    <code>BroadcastChannel</code> 更直接：可以发送任意可结构化克隆的数据，而且不占用存储空间。<span class="bl wide">Baseline 广泛可用</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const channel = new BroadcastChannel('auth');
+channel.postMessage({ type: 'logout' });           // 标签页 A 发送
+
+channel.addEventListener('message', event => {     // 其他标签页接收
+  if (event.data.type === 'logout') location.href = '/login';
+});
+</script>
+  </div>
+</div>
+
+<h2 id="r2-6"><span class="rn">2.6</span>列出所有已知的键</h2>
+
+<p class="prob">你想知道当前源的 localStorage 里都有哪些键。</p>
+
+<p><code>Storage</code> 没有直接返回全部键的方法，但可以用 <code>length</code> 和 <code>key(i)</code> 循环拼出来：</p>
+
+<div class="code" data-lang="js" data-file="2-12-get-all-keys.js">
+<script type="text/plain">
+/** 返回 localStorage 中所有键组成的数组 */
+function getAllKeys() {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    keys.push(localStorage.key(i));
+  }
+  return keys;
+}
+
+// 更简洁的现代写法：Storage 对象的键也可以用 Object.keys 取得
+Object.keys(localStorage);
+</script>
+</div>
+
+<p>同样的循环也能用来做「按键批量查询」：</p>
+
+<div class="code" data-lang="js" data-file="2-13-get-records-by-key.js">
+<script type="text/plain">
+function getAll(keys) {
+  const results = {};
+
+  for (let i = 0; i < localStorage.length; i++) {
+    // 取第 i 个键；如果它在要查的列表里，就把键值对放进结果
+    const key = localStorage.key(i);
+    if (keys.includes(key)) {
+      results[key] = localStorage.getItem(key);
+    }
+  }
+
+  return results;
+}
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 键的顺序不可靠</div>
+  <p><code>key(i)</code> 的顺序在不同浏览器中可能不一样，不要依赖它。需要有序就自己排序。</p>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 给键加前缀</div>
+  <p>
+    同一个源下的所有代码（包括你引入的第三方库）共享一个 localStorage。
+    给自己的键统一加前缀，比如 <code>myapp:theme</code>、<code>myapp:draft</code>，
+    列出时就能用 <code>key.startsWith('myapp:')</code> 过滤，清理时也不会误删别人的数据。
+  </p>
+</div>
+
+<h2 id="r2-7"><span class="rn">2.7</span>删除数据</h2>
+
+<p class="prob">你想删除 localStorage 中的部分或全部数据。</p>
+
+<div class="code" data-lang="js" data-file="2-14-remove-item.js">
+<script type="text/plain">
+// 删除单项。键不存在也不会抛异常，可以放心调用
+localStorage.removeItem('my-key');
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="2-15-removing-all-items.js">
+<script type="text/plain">
+// 清空当前源的全部数据（慎用：会连第三方库的数据一起删掉）
+localStorage.clear();
+</script>
+</div>
+
+<p>
+  因为空间有限（约 5 MB），不再需要的数据应该及时删除。比如表情选择器把「最近使用」存在 localStorage，
+  就可以提供一个「清除最近使用」按钮。
+</p>
+
+<div class="demo">
+  <div class="h">试一试：查看并管理本站的 localStorage</div>
+  <div class="b">
+    <div class="row">
+      <input id="ls-key" placeholder="键" style="width:130px">
+      <input id="ls-val" placeholder="值" style="width:160px">
+      <button id="ls-set">setItem</button>
+      <button id="ls-list">列出全部</button>
+      <button id="ls-clear">删除所有 demo- 开头的键</button>
+    </div>
+    <div class="out" id="ls-out"></div>
+    <p class="hint">为了不影响本站其他数据，这里写入的键会自动加上 <code>demo-</code> 前缀。试着存一个数字，再看看读出来的类型。</p>
+  </div>
+</div>
+
+<h2 id="modern">现代注意事项</h2>
+
+<h3>写满了怎么办</h3>
+
+<p>超过配额时 <code>setItem</code> 会抛出 <code>QuotaExceededError</code>。凡是写入用户可控长度的数据，都应该包一层 <code>try/catch</code>：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+function safeSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    if (e.name === 'QuotaExceededError') {
+      console.warn('存储空间已满，考虑清理旧数据或改用 IndexedDB');
+    }
+    return false;
+  }
+}
+</script>
+</div>
+
+<h3>数据并不是「永久」的</h3>
+
+<ul>
+  <li><strong>用户可以随时清除</strong>站点数据，隐私/无痕模式下关闭窗口也会清空。</li>
+  <li><strong>Safari 的智能防跟踪（ITP）</strong>：如果用户 7 天内没有和你的网站交互，Safari 可能删除该站点通过脚本写入的存储（包括 localStorage 和 IndexedDB）。安装到主屏幕的 Web 应用不受此限。</li>
+  <li><strong>存储分区</strong>：主流浏览器都已对第三方 iframe 的存储做了分区。嵌在 <code>a.com</code> 里的 <code>widget.com</code> iframe，和嵌在 <code>b.com</code> 里的同一个 iframe，拿到的是两份<strong>不同的</strong> localStorage。</li>
+</ul>
+
+<p>
+  如果数据确实重要，可以请求浏览器把本站存储标记为「持久」，并查看配额使用情况：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// StorageManager API：Baseline 广泛可用
+if (navigator.storage?.persist) {
+  const granted = await navigator.storage.persist();  // 请求「不要在空间紧张时自动清理我」
+  console.log('持久化存储：', granted ? '已授予' : '未授予');
+}
+
+const { usage, quota } = await navigator.storage.estimate();
+console.log(`已用 ${(usage / 1024 / 1024).toFixed(1)} MB / 可用 ${(quota / 1024 / 1024).toFixed(0)} MB`);
+// 注意：这个配额是 IndexedDB、Cache API 等共享的大配额；localStorage 另有约 5 MB 的独立上限
+</script>
+</div>
+
+<h3>浏览器存储选型</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="浏览器各种存储方式按数据量和复杂度排布">
+  <path class="ln" d="M60 220 H740" marker-end="url(#ar)"/>
+  <path class="ln" d="M60 220 V20" marker-end="url(#ar)"/>
+  <text class="sm" x="740" y="240" text-anchor="end">数据量 →</text>
+  <text class="sm" x="68" y="30">能力 / 复杂度 ↑</text>
+
+  <rect class="bx-p" x="80" y="160" width="130" height="44" rx="8"/>
+  <text class="lbl on-p" x="145" y="180" text-anchor="middle">Cookie</text>
+  <text class="sm" x="145" y="196" text-anchor="middle">~4KB · 随请求发送</text>
+
+  <rect class="bx-a" x="230" y="130" width="160" height="44" rx="8"/>
+  <text class="lbl on-a" x="310" y="150" text-anchor="middle">local/sessionStorage</text>
+  <text class="sm" x="310" y="166" text-anchor="middle">~5MB · 同步 · 字符串</text>
+
+  <rect class="bx-b" x="410" y="80" width="150" height="44" rx="8"/>
+  <text class="lbl on-b" x="485" y="100" text-anchor="middle">IndexedDB（第 5 章）</text>
+  <text class="sm" x="485" y="116" text-anchor="middle">大容量 · 异步 · 对象</text>
+
+  <rect class="bx-g" x="580" y="40" width="150" height="44" rx="8"/>
+  <text class="lbl on-g" x="655" y="60" text-anchor="middle">OPFS（第 10 章）</text>
+  <text class="sm" x="655" y="76" text-anchor="middle">私有文件系统 · 二进制</text>
+
+  <rect class="bx" x="580" y="130" width="150" height="44" rx="8"/>
+  <text class="lbl" x="655" y="150" text-anchor="middle">Cache API</text>
+  <text class="sm" x="655" y="166" text-anchor="middle">缓存 Request/Response</text>
+</svg>
+<figcaption>图 2-6　按需求选存储：小设置用 localStorage，数据多了就上 IndexedDB</figcaption>
+</figure>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li><code>localStorage</code> 跨标签页、跨会话保留；<code>sessionStorage</code> 只在当前标签页有效。两者都按源隔离。</li>
+  <li>只能存字符串：对象用 <code>JSON.stringify / parse</code>，<code>Date</code> 等复杂值用 replacer / reviver 或 <code>toJSON</code>。</li>
+  <li><code>storage</code> 事件通知<strong>其他</strong>标签页数据有变化；只想发消息用 <code>BroadcastChannel</code>。</li>
+  <li>容量约 5 MB、同步阻塞、XSS 可读 —— 只存少量非敏感数据，写入要处理 <code>QuotaExceededError</code>。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个「草稿自动保存」：<code>&lt;textarea&gt;</code> 每次输入都存到 <code>sessionStorage</code>，刷新后恢复。关掉标签页再打开，观察数据是否还在。改成 <code>localStorage</code> 再试一次。</li>
+    <li>写一个通用的 <code>createStore(prefix)</code>，返回带 <code>get / set / remove / keys / clear</code> 方法的对象，自动处理 JSON 和前缀。</li>
+    <li>让你的 store 支持存 <code>Date</code>：约定序列化为 <code>{ "__type": "Date", "value": 时间戳 }</code>，并写出对应的通用 replacer 和 reviver。</li>
+    <li>打开两个标签页，用 <code>storage</code> 事件实现「一边切换深色模式，另一边自动跟着切换」。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var ls;
+  try { ls = window.localStorage; ls.getItem('x'); } catch (e) { ls = null; }
+
+  // ---- 颜色持久化 ----
+  var picker = document.getElementById('demo-color');
+  var msg = document.getElementById('demo-color-msg');
+  if (!ls) { msg.textContent = '当前环境禁用了 localStorage'; }
+  else {
+    var saved = ls.getItem('demo-savedColor');
+    if (saved) { picker.value = saved; msg.textContent = '已从 localStorage 恢复：' + saved; }
+    picker.addEventListener('change', function () {
+      ls.setItem('demo-savedColor', picker.value);
+      msg.textContent = '已保存：' + picker.value;
+    });
+    window.addEventListener('storage', function (e) {
+      if (e.key === 'demo-savedColor' && e.newValue) {
+        picker.value = e.newValue;
+        msg.textContent = '另一个标签页改成了 ' + e.newValue + '（storage 事件）';
+      }
+    });
+  }
+
+  // ---- 管理面板 ----
+  var out = document.getElementById('ls-out');
+  function list() {
+    if (!ls) { out.textContent = 'localStorage 不可用'; return; }
+    var keys = Object.keys(ls).sort();
+    out.textContent = 'localStorage.length = ' + ls.length + '\n' +
+      keys.map(function (k) {
+        var v = ls.getItem(k);
+        return k + ' = ' + JSON.stringify(v) + '   (typeof: ' + typeof v + ')';
+      }).join('\n');
+  }
+  document.getElementById('ls-set').addEventListener('click', function () {
+    if (!ls) return list();
+    var k = document.getElementById('ls-key').value.trim() || 'test';
+    var raw = document.getElementById('ls-val').value;
+    var v = raw !== '' && !isNaN(raw) ? Number(raw) : raw;   // 故意传数字进去
+    try {
+      ls.setItem('demo-' + k, v);
+      list();
+      out.textContent = 'setItem(' + JSON.stringify('demo-' + k) + ', ' + (typeof v === 'number' ? v : JSON.stringify(v)) +
+        ')  ← 传入的类型是 ' + typeof v + '\n\n' + out.textContent;
+    } catch (e) { out.textContent = e.name + ': ' + e.message; }
+  });
+  document.getElementById('ls-list').addEventListener('click', list);
+  document.getElementById('ls-clear').addEventListener('click', function () {
+    if (!ls) return list();
+    Object.keys(ls).filter(function (k) { return k.indexOf('demo-') === 0; })
+      .forEach(function (k) { ls.removeItem(k); });
+    list();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,920 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 7 章 · 表单 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .demo-form .field { margin: 10px 0; }
+  .demo-form label { display: block; font-size: 13.5px; font-weight: 600; margin-bottom: 3px; }
+  .demo-form input[type=text], .demo-form input[type=email], .demo-form input[type=password], .demo-form input[type=number] { width: 100%; max-width: 320px; }
+  .demo-form input:user-invalid { border-color: var(--red); background: var(--red-bg); }
+  .demo-form input:user-valid   { border-color: var(--green); }
+  .demo-form .error-message { color: var(--red); font-size: 13px; min-height: 1.2em; }
+  .demo-form fieldset { border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 12px; max-width: 320px; }
+  .demo-form legend { font-size: 13.5px; font-weight: 600; padding: 0 4px; }
+</style>
+</head>
+<body data-chapter="7">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 7 章</span>
+<h1>表单</h1>
+<p class="lede">
+  表单是用户向你的应用「说话」的主要方式。浏览器其实已经内置了相当完整的表单能力：
+  <code>FormData</code> 帮你收集数据，<strong>约束校验 API</strong>（Constraint Validation API）帮你检查数据。
+  很多时候，你并不需要引入一个表单校验库。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>用 <code>form.elements</code> 读写字段，用 <code>FormData</code> 收集并提交数据</li>
+    <li>把表单转换为 JSON 提交，正确处理同名的多选字段</li>
+    <li>用 <code>required</code>、<code>min/max/step</code>、<code>pattern</code>、<code>type</code> 声明校验规则</li>
+    <li>用 <code>checkValidity</code>、<code>invalid</code> 事件、<code>setCustomValidity</code> 打造自己的校验体验</li>
+    <li>实现复选框组校验和异步（调用接口）校验，并用 <code>:user-invalid</code> 简化「何时显示错误」</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">两件利器：FormData 与约束校验</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="表单数据的两条处理路径：校验与提交">
+  <rect class="bx" x="20" y="70" width="170" height="110" rx="10"/>
+  <text class="ttl" x="105" y="92" text-anchor="middle">&lt;form&gt;</text>
+  <rect class="bx-d" x="36" y="102" width="138" height="20" rx="4"/><text class="sm" x="105" y="116" text-anchor="middle">username</text>
+  <rect class="bx-d" x="36" y="126" width="138" height="20" rx="4"/><text class="sm" x="105" y="140" text-anchor="middle">email</text>
+  <rect class="bx-d" x="36" y="150" width="138" height="20" rx="4"/><text class="sm" x="105" y="164" text-anchor="middle">☑ options × 2</text>
+
+  <path class="ln-p" d="M192 100 H250 V56 H280" marker-end="url(#ar-p)"/>
+  <rect class="bx-p" x="284" y="20" width="200" height="72" rx="10"/>
+  <text class="ttl on-p" x="384" y="42" text-anchor="middle">约束校验 API</text>
+  <text class="sm" x="384" y="62" text-anchor="middle">required / pattern / min / max …</text>
+  <text class="mono" x="384" y="80" text-anchor="middle">checkValidity() · validity</text>
+  <path class="ln-p" d="M486 56 H540" marker-end="url(#ar-p)"/>
+  <rect class="bx-r" x="544" y="30" width="196" height="52" rx="10"/>
+  <text class="lbl on-r" x="642" y="52" text-anchor="middle">invalid 事件</text>
+  <text class="sm" x="642" y="70" text-anchor="middle">显示错误信息</text>
+
+  <path class="ln-b" d="M192 150 H250 V186 H280" marker-end="url(#ar-b)"/>
+  <rect class="bx-b" x="284" y="150" width="200" height="72" rx="10"/>
+  <text class="ttl on-b" x="384" y="172" text-anchor="middle">new FormData(form)</text>
+  <text class="sm" x="384" y="192" text-anchor="middle">按 name 收集所有字段的值</text>
+  <text class="mono" x="384" y="210" text-anchor="middle">get / getAll / set / append</text>
+  <path class="ln-b" d="M486 170 H540" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M486 202 H540" marker-end="url(#ar-b)"/>
+  <rect class="bx-g" x="544" y="150" width="196" height="34" rx="8"/>
+  <text class="sm on-g" x="642" y="171" text-anchor="middle">fetch body（multipart）</text>
+  <rect class="bx-g" x="544" y="190" width="196" height="34" rx="8"/>
+  <text class="sm on-g" x="642" y="211" text-anchor="middle">转对象 → JSON</text>
+  <text class="sm" x="380" y="246" text-anchor="middle">先校验，再提交</text>
+</svg>
+<figcaption>图 7-1　约束校验负责「数据对不对」，FormData 负责「把数据拿出来」</figcaption>
+</figure>
+
+<p>
+  浏览器默认的校验提示（气泡）样式无法定制，往往和应用的设计格格不入。约束校验 API 让你读取浏览器的校验结果，
+  用自己的方式展示错误，还能加入自定义规则。核心成员：
+</p>
+
+<dl class="terms">
+  <dt>checkValidity()</dt><dd>在表单或单个字段上调用。全部有效返回 <code>true</code>；否则返回 <code>false</code>，并在每个无效字段上触发 <code>invalid</code> 事件</dd>
+  <dt>reportValidity()</dt><dd>同上，但还会弹出浏览器自带的错误气泡</dd>
+  <dt>validity</dt><dd>每个字段上的 <code>ValidityState</code> 对象：<code>valid</code> 表示总体是否有效，其余标志说明「错在哪」</dd>
+  <dt>validationMessage</dt><dd>浏览器生成的错误提示文本（跟随用户的浏览器语言）</dd>
+  <dt>setCustomValidity(msg)</dt><dd>设置自定义错误；传空字符串表示清除</dd>
+</dl>
+
+<h2 id="r7-1"><span class="rn">7.1</span>从 localStorage 回填表单字段</h2>
+
+<p class="prob">你想记住用户在登录表单里输入的用户名，下次打开时自动填上。</p>
+
+<div class="code" data-lang="js" data-file="7-01-remember-username.js">
+<script type="text/plain">
+const form = document.querySelector('#login-form');
+
+// 页面加载：有记住的用户名就填进去
+const username = localStorage.getItem('username');
+if (username) {
+  form.elements.username.value = username;
+}
+
+// 提交时：从 FormData 取出用户名存起来
+form.addEventListener('submit', event => {
+  const data = new FormData(form);
+  localStorage.setItem('username', data.get('username'));
+});
+</script>
+</div>
+
+<p>
+  注意「读」和「写」用了不同的工具。<code>FormData</code> 只是创建那一刻的<strong>快照</strong>，它和表单之间<strong>没有双向同步</strong>：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="FormData 是表单的一次性快照">
+  <rect class="bx" x="20" y="30" width="200" height="80" rx="10"/>
+  <text class="ttl" x="120" y="54" text-anchor="middle">表单（活的）</text>
+  <text class="mono" x="120" y="80" text-anchor="middle">username = 'ava'</text>
+  <text class="sm" x="120" y="98" text-anchor="middle">用户随时在改</text>
+  <path class="ln-b" d="M222 60 H330" marker-end="url(#ar-b)"/>
+  <text class="mono on-b" x="276" y="52" text-anchor="middle">new FormData()</text>
+  <rect class="bx-b" x="334" y="30" width="200" height="80" rx="10"/>
+  <text class="ttl on-b" x="434" y="54" text-anchor="middle">FormData（快照）</text>
+  <text class="mono" x="434" y="80" text-anchor="middle">username = 'ava'</text>
+  <text class="sm" x="434" y="98" text-anchor="middle">之后表单再改，它不变</text>
+  <path class="ln-r" d="M332 92 H226" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="276" y="110" text-anchor="middle">✗ 改它不会影响表单</text>
+  <rect class="bx-g" x="560" y="30" width="180" height="80" rx="10"/>
+  <text class="ttl on-g" x="650" y="54" text-anchor="middle">回填表单要用</text>
+  <text class="mono" x="650" y="80" text-anchor="middle">form.elements</text>
+  <text class="mono" x="650" y="98" text-anchor="middle">.username.value</text>
+</svg>
+<figcaption>图 7-2　FormData 适合「读出」，回填要直接操作字段</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; 用 form.elements 按名字找字段</div>
+  <p>
+    <code>form.elements</code> 是表单内所有控件的集合，可以用字段的 <strong><code>name</code></strong>（或 <code>id</code>）直接访问：
+    <code>form.elements.username</code>、<code>form.elements['user-name']</code>。
+    比 <code>document.querySelector</code> 更精确，不会误拿到页面上其他表单的同名字段。
+  </p>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 也别忘了浏览器自带的记忆</div>
+  <p>
+    给字段写上合适的 <code>autocomplete</code> 属性（如 <code>autocomplete="username"</code>、<code>"email"</code>、<code>"current-password"</code>），
+    浏览器和密码管理器就能自动填充，通常比自己存 localStorage 体验更好，也更安全。
+  </p>
+</div>
+
+<h2 id="r7-2"><span class="rn">7.2</span>用 Fetch 和 FormData 提交表单</h2>
+
+<p class="prob">你想用 fetch 提交表单：可能要额外附带一个不在表单里的 API 令牌，也可能只是不想让页面整体刷新跳转。</p>
+
+<div class="code" data-lang="js" data-file="7-02-using-form-data.js">
+<script type="text/plain">
+// 真实项目中令牌应从别处获取，而不是写死在代码里
+const apiToken = 'aBcD1234EfGh5678IjKlM';
+
+form.addEventListener('submit', event => {
+  // 关键：阻止浏览器默认的提交（整页刷新 / 跳转）
+  event.preventDefault();
+
+  // 用表单创建 FormData，再补上令牌
+  const data = new FormData(event.target);
+  data.set('apiToken', apiToken);
+
+  // 把 FormData 直接作为 fetch 的请求体
+  fetch('/api/form', {
+    method: 'POST',
+    body: data
+  });
+});
+</script>
+</div>
+
+<p>以 FormData 作为 body 时，浏览器用 <code>multipart/form-data</code> 格式发送（第 4 章讲过，不要手动设置 Content-Type），请求体大致如下：</p>
+
+<div class="code" data-lang="text" data-file="请求体">
+<pre>
+------WebKitFormBoundaryl6AuUOn9EbuYe9XO
+Content-Disposition: form-data; name="username"
+
+john.doe
+------WebKitFormBoundaryl6AuUOn9EbuYe9XO
+Content-Disposition: form-data; name="apiToken"
+
+aBcD1234EfGh5678IjKlM
+------WebKitFormBoundaryl6AuUOn9EbuYe9XO--
+</pre>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 带上「点的是哪个按钮」</div>
+  <p>
+    一个表单有「保存草稿」和「发布」两个提交按钮时，浏览器原生提交会带上被点击按钮的 <code>name=value</code>，但 <code>new FormData(form)</code> 不会。
+    现在可以把 <code>event.submitter</code> 作为第二个参数传入：<span class="bl newly">Baseline 2023</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  const data = new FormData(form, event.submitter);  // 包含 <button name="action" value="publish">
+  data.get('action');  // 'publish' 或 'draft'
+});
+</script>
+  </div>
+</div>
+
+<h2 id="r7-3"><span class="rn">7.3</span>以 JSON 格式提交表单</h2>
+
+<p class="prob">后端接口只接受 JSON。</p>
+
+<div class="code" data-lang="js" data-file="7-03-form-json.js">
+<script type="text/plain">
+form.addEventListener('submit', event => {
+  event.preventDefault();
+
+  // 把 FormData 中的每个键值对复制到一个普通对象
+  const data = new FormData(event.target);
+  const body = {};
+  for (const [key, value] of data.entries()) {
+    body[key] = value;
+  }
+
+  fetch('/api/form', {
+    method: 'POST',
+    body: JSON.stringify(body),                      // 对象要转成 JSON 字符串
+    headers: { 'content-type': 'application/json' } // 告诉服务器这是 JSON
+  })
+    .then(response => response.json())
+    .then(body => console.log('Got response:', body));
+});
+
+// 更短的写法，效果相同：
+const body = Object.fromEntries(new FormData(form));
+</script>
+</div>
+
+<p>
+  上面的写法有个问题：一组同名复选框（比如 <code>name="options"</code> 的三个复选框勾了两个）会产生两个同名条目，
+  后一个会<strong>覆盖</strong>前一个。用 <code>getAll</code> 可以把它们收集成数组：
+</p>
+
+<div class="code" data-lang="js" data-file="7-04-form-array.js">
+<script type="text/plain">
+/**
+ * 把表单数据转换成可以发送为 JSON 的对象
+ */
+function toObject(form) {
+  const data = new FormData(form);
+  const body = {};
+
+  for (const key of data.keys()) {
+    // getAll 返回该键对应的所有值组成的数组
+    const values = data.getAll(key);
+
+    // 只有一个值就直接用这个值，否则用数组
+    if (values.length === 1) {
+      body[key] = values[0];
+    } else {
+      body[key] = values;
+    }
+  }
+
+  return body;
+}
+// { username: 'ava', options: ['a', 'c'] }
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 「一个值 vs 数组」的类型不稳定</div>
+  <p>
+    按上面的逻辑，用户只勾一个时 <code>options</code> 是字符串，勾两个时变成数组，后端要处理两种类型，很容易出 bug。
+    更稳妥的做法是事先约定哪些字段是多选的，对这些字段<strong>总是</strong>用 <code>getAll</code>（勾零个时是空数组）。
+    另外要记住：<strong>一个都没勾选的复选框根本不会出现在 FormData 里</strong>。
+  </p>
+</div>
+
+<h2 id="builtin">内置校验规则（7.4 – 7.6）</h2>
+
+<p>下面三个配方都是在 HTML 上加属性，不写一行 JS。它们一起讲更容易对比：</p>
+
+<h3><span class="rn" style="font-size:12px">7.4</span>必填字段：required</h3>
+
+<div class="code" data-lang="html" data-file="7-05-required-field.html">
+<script type="text/plain">
+<label for="username">Username</label>
+<input type="text" name="username" id="username" required>
+</script>
+</div>
+
+<p>
+  <code>required</code> 是布尔属性，不需要写值。字段为空时 <code>validity.valueMissing</code> 为 <code>true</code>。
+  注意它只判断「是否为空字符串」，<strong>不会去掉空格</strong> —— 输入几个空格也算「有值」。
+</p>
+
+<h3><span class="rn" style="font-size:12px">7.5</span>数字范围：min / max / step</h3>
+
+<div class="code" data-lang="html" data-file="7-06-number-range.html">
+<script type="text/plain">
+<label for="quantity">Quantity</label>
+<input type="number" name="quantity" id="quantity" min="1" max="10">
+</script>
+</div>
+
+<p>
+  <code>min</code> 和 <code>max</code> 都是<strong>包含</strong>边界的。小于最小值时 <code>rangeUnderflow</code> 为 <code>true</code>，大于最大值时 <code>rangeOverflow</code> 为 <code>true</code>。
+  数字框的上下箭头不会越界，但用户依然可以直接<strong>键入</strong>任何数字，所以校验仍然必要。
+</p>
+
+<p><code>step</code> 限制「步长」：<code>min="0" max="4" step="2"</code> 时只有 0、2、4 合法，输入 3 会触发 <code>stepMismatch</code>。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 120" role="img" aria-label="min、max、step 构成的合法值">
+  <path class="ln" d="M40 60 H720" marker-end="url(#ar)"/>
+  <g>
+    <circle cx="100" cy="60" r="5" style="fill:var(--line-2)"/><text class="sm" x="100" y="86" text-anchor="middle">-1</text>
+    <circle cx="200" cy="60" r="8" style="fill:var(--green)"/><text class="lbl on-g" x="200" y="86" text-anchor="middle">0</text>
+    <circle cx="300" cy="60" r="5" style="fill:var(--red)"/><text class="sm on-r" x="300" y="86" text-anchor="middle">1</text>
+    <circle cx="400" cy="60" r="8" style="fill:var(--green)"/><text class="lbl on-g" x="400" y="86" text-anchor="middle">2</text>
+    <circle cx="500" cy="60" r="5" style="fill:var(--red)"/><text class="sm on-r" x="500" y="86" text-anchor="middle">3</text>
+    <circle cx="600" cy="60" r="8" style="fill:var(--green)"/><text class="lbl on-g" x="600" y="86" text-anchor="middle">4</text>
+    <circle cx="700" cy="60" r="5" style="fill:var(--line-2)"/><text class="sm" x="700" y="86" text-anchor="middle">5</text>
+  </g>
+  <text class="sm" x="100" y="36" text-anchor="middle">rangeUnderflow</text>
+  <text class="sm on-r" x="400" y="36" text-anchor="middle">1、3 → stepMismatch</text>
+  <text class="sm" x="700" y="36" text-anchor="middle">rangeOverflow</text>
+  <text class="sm on-g" x="400" y="112" text-anchor="middle">min="0" max="4" step="2" → 只有 0、2、4 合法</text>
+</svg>
+<figcaption>图 7-3　step 以 min 为起点计算合法值</figcaption>
+</figure>
+
+<h3><span class="rn" style="font-size:12px">7.6</span>正则模式：pattern</h3>
+
+<div class="code" data-lang="html" data-file="7-07-field-pattern.html">
+<script type="text/plain">
+<label for="username">Enter a username</label>
+<input type="text" pattern="[A-Za-z0-9]+" id="username" name="username">
+</script>
+</div>
+
+<p>
+  值不匹配正则时 <code>patternMismatch</code> 为 <code>true</code>。<code>pattern</code> 会自动匹配<strong>整个值</strong>（相当于自动加了 <code>^(?:</code> 和 <code>)$</code>），
+  并且只在字段非空时才检查（空值交给 <code>required</code> 管）。
+  校验邮箱和网址的正则很难写对，直接用 <code>type="email"</code> 和 <code>type="url"</code>，浏览器会替你检查格式（<code>typeMismatch</code>）。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 现代浏览器用 <code>v</code> 标志编译 pattern</div>
+  <p>
+    自 2023 年起，主流浏览器用正则的 <code>v</code>（unicodeSets）标志来编译 <code>pattern</code>，规则比以前更严格。
+    例如 <code>pattern="[\w-]+"</code> 在 <code>v</code> 模式下是<strong>语法错误</strong>，浏览器会静默忽略整个 pattern，校验等于没写！
+    字符类里的 <code>-</code>、<code>(</code>、<code>)</code>、<code>[</code>、<code>{</code>、<code>/</code>、<code>|</code> 等需要转义：写成 <code>[\w\-]+</code>。
+    写完后可以在控制台用 <code>new RegExp('^(?:' + p + ')$', 'v')</code> 测试一下。
+  </p>
+</div>
+
+<h3>ValidityState 全部标志</h3>
+
+<div class="tw">
+<table>
+  <tr><th>标志</th><th>为 true 表示</th><th>由什么触发</th></tr>
+  <tr><td><code>valueMissing</code></td><td>必填但为空</td><td><code>required</code></td></tr>
+  <tr><td><code>typeMismatch</code></td><td>格式不符</td><td><code>type="email"</code> / <code>"url"</code></td></tr>
+  <tr><td><code>patternMismatch</code></td><td>不匹配正则</td><td><code>pattern</code></td></tr>
+  <tr><td><code>tooShort</code> / <code>tooLong</code></td><td>长度不够 / 超长</td><td><code>minlength</code> / <code>maxlength</code></td></tr>
+  <tr><td><code>rangeUnderflow</code> / <code>rangeOverflow</code></td><td>小于最小值 / 大于最大值</td><td><code>min</code> / <code>max</code></td></tr>
+  <tr><td><code>stepMismatch</code></td><td>不符合步长</td><td><code>step</code></td></tr>
+  <tr><td><code>badInput</code></td><td>浏览器无法解析输入（如数字框里打了字母）</td><td>输入本身</td></tr>
+  <tr><td><code>customError</code></td><td>设置了自定义错误</td><td><code>setCustomValidity()</code></td></tr>
+  <tr><td><code>valid</code></td><td>以上全部为 false</td><td>—</td></tr>
+</table>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：实时查看 validity 标志</div>
+  <div class="b">
+    <div class="row">
+      <select id="v-kind">
+        <option value="req">type=text required</option>
+        <option value="email">type=email</option>
+        <option value="num" selected>type=number min=0 max=4 step=2</option>
+        <option value="pat">pattern=[A-Za-z0-9]+</option>
+      </select>
+      <span id="v-slot"></span>
+    </div>
+    <div class="out" id="v-out"></div>
+  </div>
+</div>
+
+<h2 id="r7-7"><span class="rn">7.7</span>自己掌控校验流程</h2>
+
+<p class="prob">你想自己管理校验过程，并在页面上用自己的样式显示错误信息。</p>
+
+<p>
+  好的校验体验讲究<strong>时机</strong>：用户还没输完邮箱就弹出「邮箱格式错误」，非常烦人。这里采用的策略是：只在两种情况下显示错误 ——
+  <strong>提交表单时</strong>，或者<strong>字段被「碰过」之后</strong>（获得焦点又失去焦点）。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="字段校验时机的状态变化">
+  <rect class="bx" x="20" y="70" width="170" height="70" rx="10"/>
+  <text class="ttl" x="105" y="98" text-anchor="middle">未触碰</text>
+  <text class="sm" x="105" y="118" text-anchor="middle">输入时不显示错误</text>
+
+  <rect class="bx-b" x="300" y="70" width="190" height="70" rx="10"/>
+  <text class="ttl on-b" x="395" y="92" text-anchor="middle">已触碰</text>
+  <text class="mono" x="395" y="112" text-anchor="middle">data-should-validate</text>
+  <text class="sm" x="395" y="130" text-anchor="middle">之后每次 input 都重新校验</text>
+
+  <path class="ln-b" d="M192 90 H296" marker-end="url(#ar-b)"/>
+  <text class="mono on-b" x="244" y="82" text-anchor="middle">blur</text>
+  <path class="ln-r" d="M192 125 H296" marker-end="url(#ar-r)"/>
+  <text class="mono on-r" x="244" y="148" text-anchor="middle">invalid（提交时）</text>
+
+  <rect class="bx-r" x="580" y="20" width="160" height="60" rx="10"/>
+  <text class="lbl on-r" x="660" y="46" text-anchor="middle">显示错误</text>
+  <text class="sm" x="660" y="64" text-anchor="middle">validationMessage</text>
+  <rect class="bx-g" x="580" y="130" width="160" height="60" rx="10"/>
+  <text class="lbl on-g" x="660" y="156" text-anchor="middle">清除错误</text>
+  <text class="sm" x="660" y="174" text-anchor="middle">checkValidity() 为 true</text>
+  <path class="ln-r" d="M492 90 L576 54" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="520" y="60">invalid</text>
+  <path class="ln-g" d="M492 120 L576 156" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="520" y="154">input</text>
+  <text class="sm" x="380" y="212" text-anchor="middle">用户在输入过程中不被打扰；一旦出过错，改对的那一刻错误就消失</text>
+</svg>
+<figcaption>图 7-4　「碰过再校验」的交互策略</figcaption>
+</figure>
+
+<p>第一步，给表单加 <code>novalidate</code> 关闭浏览器自带的气泡（校验 API 依然可用）；为每个字段准备一个放错误信息的元素：</p>
+
+<div class="code" data-lang="html" data-file="7-08 / 7-09">
+<script type="text/plain">
+<form id="my-form" novalidate>
+  <div>
+    <label for="email">Email</label>
+    <input required type="email" id="email" name="email">
+    <!-- 约定：错误元素的 id = 字段 id + '-error' -->
+    <div class="error-message" id="email-error"></div>
+  </div>
+</form>
+</script>
+</div>
+
+<p>第二步，每个字段监听三个事件：</p>
+
+<div class="code" data-lang="js" data-file="7-10-setup-validation.js">
+<script type="text/plain">
+/**
+ * 给字段添加校验所需的事件监听，负责显示和清除错误信息
+ */
+function addValidation(element) {
+  const errorElement = document.getElementById(`${element.id}-error`);
+
+  // 表单校验时字段无效：显示错误，并标记为「需要校验」
+  element.addEventListener('invalid', () => {
+    errorElement.textContent = element.validationMessage;
+    element.dataset.shouldValidate = true;
+  });
+
+  // 用户输入：如果已标记，就重新校验；变有效时清除错误
+  element.addEventListener('input', () => {
+    if (element.dataset.shouldValidate) {
+      if (element.checkValidity()) {
+        errorElement.textContent = '';
+      }
+    }
+  });
+
+  // 失去焦点：字段被「碰过」了，之后的输入都要校验
+  element.addEventListener('blur', () => {
+    element.dataset.shouldValidate = true;
+  });
+}
+</script>
+</div>
+
+<p>第三步，提交时触发整体校验：</p>
+
+<div class="code" data-lang="js" data-file="7-11-trigger-validation.js">
+<script type="text/plain">
+addValidation(form.elements.name);
+addValidation(form.elements.email);
+
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  if (form.checkValidity()) {
+    // 校验通过，提交表单
+  }
+});
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 复选框和单选框用 change 还是 input？</div>
+  <p>
+    按照 HTML 标准，复选框和单选框切换时应该触发 <code>input</code> 事件，过去有浏览器没有这样做，所以书中建议对它们改听 <code>change</code>。
+    今天主流浏览器的行为已经一致，两个事件都会触发；为了保险，对这类控件监听 <code>change</code> 依然是最稳妥的选择。
+  </p>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 别忘了无障碍</div>
+  <p>
+    自己渲染错误信息时，屏幕阅读器用户并不知道那段红字属于哪个输入框。补上两个 ARIA 属性：
+  </p>
+  <div class="code" data-lang="html">
+<script type="text/plain">
+<input id="email" aria-describedby="email-error" aria-invalid="true">
+<div id="email-error" class="error-message">请输入有效的邮箱地址</div>
+</script>
+  </div>
+  <p>在 <code>invalid</code> 处理函数里设置 <code>aria-invalid="true"</code>，清除错误时移除它。</p>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; <code>:user-invalid</code>：浏览器帮你判断「碰过没有」</div>
+  <p>
+    CSS 伪类 <code>:invalid</code> 从页面加载起就生效，空的必填框一打开就是红的。
+    新的 <code>:user-invalid</code> / <code>:user-valid</code> 只在<strong>用户和字段交互过之后</strong>（或尝试提交之后）才匹配，
+    恰好就是上面那套 <code>data-should-validate</code> 逻辑的原生版本。<span class="bl newly">Baseline 2023</span>
+  </p>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+input:user-invalid { border-color: crimson; background: #fdecea; }
+input:user-valid   { border-color: seagreen; }
+
+/* 配合 :has()，还能让整个字段容器变红、显示提示 */
+.field:has(input:user-invalid) .error-message { display: block; }
+</script>
+  </div>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：自定义校验体验（本页的表单使用了 :user-invalid 样式）</div>
+  <div class="b">
+    <form class="demo-form" id="demo-form" novalidate>
+      <div class="field">
+        <label for="d-name">昵称（必填，至少 2 个字）</label>
+        <input type="text" id="d-name" name="name" required minlength="2" aria-describedby="d-name-error">
+        <div class="error-message" id="d-name-error"></div>
+      </div>
+      <div class="field">
+        <label for="d-email">邮箱</label>
+        <input type="email" id="d-email" name="email" required aria-describedby="d-email-error">
+        <div class="error-message" id="d-email-error"></div>
+      </div>
+      <div class="field">
+        <label for="d-pw">密码</label>
+        <input type="password" id="d-pw" name="password" required minlength="6" aria-describedby="d-pw-error">
+        <div class="error-message" id="d-pw-error"></div>
+      </div>
+      <div class="field">
+        <label for="d-pw2">确认密码（7.8 的自定义校验）</label>
+        <input type="password" id="d-pw2" name="confirmPassword" required aria-describedby="d-pw2-error">
+        <div class="error-message" id="d-pw2-error"></div>
+      </div>
+      <fieldset>
+        <legend>兴趣（至少选一项，7.9 的复选框组）</legend>
+        <label style="display:inline;font-weight:400"><input type="checkbox" id="d-opt1" name="options" value="web"> Web</label>
+        <label style="display:inline;font-weight:400;margin-left:10px"><input type="checkbox" id="d-opt2" name="options" value="ai"> AI</label>
+        <label style="display:inline;font-weight:400;margin-left:10px"><input type="checkbox" id="d-opt3" name="options" value="game"> 游戏</label>
+        <div class="error-message" id="d-opt-error"></div>
+      </fieldset>
+      <div class="row" style="margin-top:10px"><button>提交</button></div>
+    </form>
+    <div class="out" id="d-out">提交后这里显示 toObject(form) 的结果</div>
+  </div>
+</div>
+
+<h2 id="r7-8"><span class="rn">7.8</span>自定义校验逻辑</h2>
+
+<p class="prob">有些规则 HTML 属性表达不了，比如「两次输入的密码必须一致」。</p>
+
+<p>
+  在调用 <code>checkValidity</code> <strong>之前</strong>执行自己的检查，不通过就用 <code>setCustomValidity(错误信息)</code> 把字段标记为无效；
+  通过时务必 <code>setCustomValidity('')</code> 清除，否则字段会一直无效。
+</p>
+
+<div class="code" data-lang="js" data-file="7-12-custom-validation.js">
+<script type="text/plain">
+/**
+ * 自定义校验：password 与 confirmPassword 必须一致
+ */
+function validatePasswordsMatch(form) {
+  const { password, confirmPassword } = form.elements;
+
+  if (password.value !== confirmPassword.value) {
+    confirmPassword.setCustomValidity('Passwords do not match.');
+  } else {
+    confirmPassword.setCustomValidity('');   // 空字符串 = 清除错误
+  }
+}
+
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  validatePasswordsMatch(form);   // 先跑自定义规则
+  if (form.checkValidity()) {     // 再统一校验：自定义错误也会触发 invalid 事件
+    // 校验通过，提交表单
+  }
+});
+</script>
+</div>
+
+<p>
+  设置了非空的自定义信息后，字段的 <code>validity.customError</code> 为 <code>true</code>，<code>checkValidity</code> 会像对待其他错误一样触发它的 <code>invalid</code> 事件，
+  所以 7.7 节的错误显示逻辑可以原样复用。如果你用的是浏览器自带的错误气泡，设置完还要调用 <code>reportValidity()</code> 才会显示。
+</p>
+
+<h2 id="r7-9"><span class="rn">7.9</span>校验复选框组</h2>
+
+<p class="prob">一组复选框里至少要勾选一个。</p>
+
+<p>
+  在每个复选框上写 <code>required</code> 行不通 —— 那意味着<strong>每一个</strong>都必须勾选。HTML 没有「复选框组」元素，
+  所以要自己判断，并选一个复选框作为整组错误信息的「载体」：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="用第一个复选框承载整组的校验错误">
+  <rect class="bx-d" x="20" y="20" width="300" height="150" rx="10"/>
+  <text class="sm" x="36" y="42">name="options" 的一组复选框</text>
+  <rect class="bx-r" x="36" y="56" width="268" height="30" rx="6"/>
+  <text class="sm on-r" x="50" y="76">☐ option1 ← setCustomValidity 只设在这里</text>
+  <rect class="bx" x="36" y="92" width="268" height="30" rx="6"/>
+  <text class="sm" x="50" y="112">☐ option2</text>
+  <rect class="bx" x="36" y="128" width="268" height="30" rx="6"/>
+  <text class="sm" x="50" y="148">☐ option3</text>
+
+  <path class="ln" d="M322 95 H380" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="384" y="60" width="170" height="70" rx="10"/>
+  <text class="mono on-b" x="469" y="88" text-anchor="middle">data.has('options')</text>
+  <text class="sm" x="469" y="108" text-anchor="middle">有任何一个被勾选吗？</text>
+  <path class="ln-r" d="M556 80 H596" marker-end="url(#ar-r)"/>
+  <path class="ln-g" d="M556 112 H596" marker-end="url(#ar-g)"/>
+  <rect class="bx-r" x="600" y="54" width="140" height="36" rx="8"/>
+  <text class="sm on-r" x="670" y="76" text-anchor="middle">否 → 设置错误</text>
+  <rect class="bx-g" x="600" y="98" width="140" height="36" rx="8"/>
+  <text class="sm on-g" x="670" y="120" text-anchor="middle">是 → 清除错误</text>
+  <text class="sm" x="560" y="164" text-anchor="middle">如果把错误分别设在被点击的那个框上，未点击的框会一直「残留」错误</text>
+</svg>
+<figcaption>图 7-5　一组复选框，一个错误状态</figcaption>
+</figure>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<form novalidate>
+  <input type="checkbox" id="option1" name="options" value="1"> 选项一
+  <input type="checkbox" id="option2" name="options" value="2"> 选项二
+  <input type="checkbox" id="option3" name="options" value="3"> 选项三
+  <div id="checkbox-error" class="error-message"></div>
+</form>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="7-13-validate-checkbox-group.js">
+<script type="text/plain">
+function validateCheckboxes(form) {
+  const data = new FormData(form);
+
+  // 只用第一个复选框承载整组的错误，避免多个元素各自带着错误
+  const element = form.elements.option1;
+
+  if (!data.has('options')) {           // 一个都没勾，FormData 里就没有这个键
+    element.setCustomValidity('Please select at least one option.');
+  } else {
+    element.setCustomValidity('');
+  }
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="7-14-setup-checkbox-validation.js">
+<script type="text/plain">
+/**
+ * @param element 复选框
+ * @param errorId 显示错误信息的元素 id
+ */
+function addValidation(element, errorId) {
+  const errorElement = document.getElementById(errorId);
+
+  element.addEventListener('invalid', () => {
+    errorElement.textContent = element.validationMessage;
+  });
+
+  // 任意复选框切换时，重新检查整组；有效就清除错误
+  element.addEventListener('change', () => {
+    validateCheckboxes(form);
+    if (form.elements.option1.checkValidity()) {
+      errorElement.textContent = '';
+    }
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="7-15-validating-checkbox-form.js">
+<script type="text/plain">
+addValidation(form.elements.option1, 'checkbox-error');
+addValidation(form.elements.option2, 'checkbox-error');
+addValidation(form.elements.option3, 'checkbox-error');
+
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  validateCheckboxes(form);
+  console.log(form.checkValidity());
+});
+</script>
+</div>
+
+<h2 id="r7-10"><span class="rn">7.10</span>异步校验</h2>
+
+<p class="prob">校验需要调用接口，比如检查密码强度、用户名是否已被占用。</p>
+
+<p>把校验写成 <code>async</code> 函数，在提交处理函数里先 <code>await</code> 它，再 <code>checkValidity</code>：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="异步校验的时序">
+  <rect class="bx" x="20" y="50" width="110" height="50" rx="8"/><text class="lbl" x="75" y="80" text-anchor="middle">submit</text>
+  <rect class="bx-b" x="160" y="50" width="170" height="50" rx="8"/><text class="mono on-b" x="245" y="72" text-anchor="middle">await fetch(…)</text><text class="sm" x="245" y="90" text-anchor="middle">询问服务器</text>
+  <rect class="bx-p" x="360" y="50" width="190" height="50" rx="8"/><text class="mono on-p" x="455" y="72" text-anchor="middle">setCustomValidity(…)</text><text class="sm" x="455" y="90" text-anchor="middle">根据结果设置 / 清除</text>
+  <rect class="bx-g" x="580" y="50" width="160" height="50" rx="8"/><text class="mono on-g" x="660" y="72" text-anchor="middle">checkValidity()</text><text class="sm" x="660" y="90" text-anchor="middle">和同步规则一起判定</text>
+  <path class="ln" d="M132 75 H156" marker-end="url(#ar)"/>
+  <path class="ln" d="M332 75 H356" marker-end="url(#ar)"/>
+  <path class="ln" d="M552 75 H576" marker-end="url(#ar)"/>
+  <text class="sm" x="380" y="134" text-anchor="middle">字段修改后，在 blur（而不是 input）时重新异步校验，避免每按一个键就请求一次</text>
+</svg>
+<figcaption>图 7-6　异步校验 = 先把结果「写进」字段，再统一检查</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="7-16-async.js（改进版）">
+<script type="text/plain">
+/**
+ * 调用接口检查密码强度
+ */
+async function validatePasswordStrength(form) {
+  const { password } = form.elements;
+
+  // 原书把密码拼进了 URL 查询参数：密码会出现在服务器日志、浏览器历史里，
+  // 而且没有编码。改为 POST 请求体发送更安全。
+  const response = await fetch('/api/password-strength', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: password.value })
+  });
+  const result = await response.json();
+
+  if (result.status === 'error') {
+    password.setCustomValidity(result.error);
+  } else {
+    password.setCustomValidity('');
+  }
+}
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 密码只能通过 HTTPS 发送</div>
+  <p>否则密码会以明文在网络上传输。另外，前端校验只是为了体验，<strong>服务器端必须再校验一次</strong> —— 任何人都可以绕过你的 JS 直接调接口。</p>
+</div>
+
+<div class="code" data-lang="js" data-file="7-17-async-form-submit.js">
+<script type="text/plain">
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  await validatePasswordStrength(form);
+  console.log(form.checkValidity());
+});
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="7-18-revalidate-blur.js">
+<script type="text/plain">
+form.elements.password.addEventListener('blur', async event => {
+  const password = event.target;
+  const errorElement = document.getElementById('password-error');
+
+  if (password.dataset.shouldValidate) {
+    await validatePasswordStrength(form);
+    if (password.checkValidity()) {
+      errorElement.textContent = '';
+      password.classList.remove('border-danger');
+    }
+  }
+});
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 防抖（debounce）与竞态</div>
+  <p>
+    想在输入时就给反馈？用<strong>防抖</strong>：用户停止输入 500ms 后才发请求。同时要处理<strong>竞态</strong>：
+    旧请求比新请求晚回来时，不能让旧结果覆盖新结果。第 4 章的 <code>AbortController</code> 正好派上用场：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+let timer, controller;
+password.addEventListener('input', () => {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    controller?.abort();                    // 取消上一个还没回来的请求
+    controller = new AbortController();
+    try {
+      const res = await fetch('/api/password-strength', {
+        method: 'POST', body: password.value, signal: controller.signal
+      });
+      const result = await res.json();
+      password.setCustomValidity(result.status === 'error' ? result.error : '');
+    } catch (e) {
+      if (e.name !== 'AbortError') throw e;
+    }
+  }, 500);
+});
+</script>
+  </div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li><code>form.elements.名字</code> 读写单个字段；<code>new FormData(form)</code> 是一次性快照，可以直接作为 fetch 的 body。</li>
+  <li>转 JSON 用 <code>Object.fromEntries</code>，多选字段用 <code>getAll</code>；没勾选的复选框不会出现在 FormData 中。</li>
+  <li><code>required</code>、<code>min/max/step</code>、<code>minlength/maxlength</code>、<code>pattern</code>、<code>type</code> 声明规则，<code>validity</code> 报告错在哪。</li>
+  <li><code>novalidate</code> + <code>invalid</code> 事件 + <code>validationMessage</code> 实现自定义错误展示；<code>:user-invalid</code> 负责「何时显示」。</li>
+  <li><code>setCustomValidity</code> 接入任意自定义规则（包括异步规则），记得在通过时传空字符串清除。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个注册表单：用户名（3–16 位字母数字）、邮箱、年龄（18–120）、密码与确认密码，全部用约束校验 API 实现，错误信息显示在字段下方。</li>
+    <li>把所有错误提示改成中文：根据 <code>validity</code> 的各个标志返回你自己写的文案，而不是使用 <code>validationMessage</code>。</li>
+    <li>模拟「用户名是否已被占用」的异步校验（用 <code>setTimeout</code> 模拟网络），加上防抖和 <code>AbortController</code>。</li>
+    <li>用 <code>:user-invalid</code> 和 <code>:has()</code> 重写 7.7 节的交互，看看还剩多少 JS。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // ---- validity 查看器 ----
+  var slot = document.getElementById('v-slot'), vOut = document.getElementById('v-out'), kind = document.getElementById('v-kind');
+  var FLAGS = ['valueMissing', 'typeMismatch', 'patternMismatch', 'tooShort', 'tooLong', 'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError', 'valid'];
+  function build() {
+    var html = {
+      req: '<input type="text" required placeholder="留空试试">',
+      email: '<input type="email" placeholder="abc@">',
+      num: '<input type="number" min="0" max="4" step="2" value="3">',
+      pat: '<input type="text" pattern="[A-Za-z0-9]+" value="hello world">'
+    }[kind.value];
+    slot.innerHTML = html;
+    var inp = slot.firstChild;
+    function show() {
+      vOut.textContent = FLAGS.map(function (f) { return (inp.validity[f] ? '■ ' : '□ ') + f + ' = ' + inp.validity[f]; }).join('\n') +
+        '\n\nvalidationMessage = ' + JSON.stringify(inp.validationMessage);
+    }
+    inp.addEventListener('input', show); show();
+  }
+  kind.addEventListener('change', build); build();
+
+  // ---- 演示表单 ----
+  var form = document.getElementById('demo-form'), out = document.getElementById('d-out');
+  function addValidation(el, errorId) {
+    var err = document.getElementById(errorId);
+    el.addEventListener('invalid', function () { err.textContent = el.validationMessage; el.setAttribute('aria-invalid', 'true'); el.dataset.shouldValidate = 'true'; });
+    el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', function () {
+      if (el.id === 'd-pw2' || el.id === 'd-pw') matchPw();
+      if (el.type === 'checkbox') checkGroup();
+      var target = el.type === 'checkbox' ? form.elements['d-opt1'] : el;
+      if (el.dataset.shouldValidate || el.type === 'checkbox') {
+        if (target.checkValidity()) { err.textContent = ''; target.removeAttribute('aria-invalid'); }
+      }
+    });
+    el.addEventListener('blur', function () { el.dataset.shouldValidate = 'true'; });
+  }
+  function matchPw() {
+    var a = form.elements.password, b = form.elements.confirmPassword;
+    b.setCustomValidity(a.value !== b.value ? '两次输入的密码不一致' : '');
+  }
+  function checkGroup() {
+    var opt1 = form.elements['d-opt1'];
+    opt1.setCustomValidity(new FormData(form).has('options') ? '' : '请至少选择一项');
+  }
+  function toObject(f) {
+    var data = new FormData(f), body = {};
+    Array.from(new Set(Array.from(data.keys()))).forEach(function (k) {
+      var v = data.getAll(k); body[k] = v.length === 1 ? v[0] : v;
+    });
+    return body;
+  }
+  ['d-name', 'd-email', 'd-pw', 'd-pw2'].forEach(function (id) { addValidation(document.getElementById(id), id + '-error'); });
+  ['d-opt1', 'd-opt2', 'd-opt3'].forEach(function (id) { addValidation(document.getElementById(id), 'd-opt-error'); });
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    matchPw(); checkGroup();
+    if (form.checkValidity()) {
+      var obj = toObject(form); obj.password = obj.confirmPassword = '••••••';
+      out.textContent = '✓ 校验通过\n' + JSON.stringify(obj, null, 2);
+    } else {
+      out.textContent = '✗ 有字段未通过校验（invalid 事件已在各字段上触发）';
+    }
+  });
+})();
+</script>
+</body>
+</html>

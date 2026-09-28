@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 13 章 · UI 元素 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .demo dialog { border: 1px solid var(--line-2); border-radius: 12px; padding: 18px 22px; background: var(--panel); color: var(--fg); max-width: 360px; }
+  .demo dialog h2 { margin: 0 0 6px; padding: 0; border: 0; font-size: 18px; }
+  .demo dialog::backdrop { background: rgba(0, 0, 0, .55); }
+  .demo [popover] { border: 1px solid var(--line-2); border-radius: 10px; padding: 12px 16px; background: var(--panel); color: var(--fg); box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+  .demo .pos-popover { margin: 0; margin-top: .5em; position: absolute; }
+  .demo #demo-tooltip { margin: 0; margin-top: .4em; position: absolute; font-size: 13px; padding: 6px 10px; background: var(--code-bg); color: var(--code-fg); border: none; }
+  .demo details { border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; margin: 6px 0; background: var(--panel-2); }
+  .demo summary { cursor: pointer; font-weight: 600; }
+  /* 锚点定位（渐进增强） */
+  .demo #anchor-btn { anchor-name: --demo-anchor; }
+  .demo #anchor-pop { position-anchor: --demo-anchor; position-area: bottom span-right; margin: 6px 0 0; position-try-fallbacks: flip-block; }
+  /* 入场动画 */
+  .demo dialog[open], .demo [popover]:popover-open { opacity: 1; transform: none;
+    transition: opacity .2s, transform .2s, overlay .2s allow-discrete, display .2s allow-discrete; }
+  @starting-style { .demo dialog[open], .demo [popover]:popover-open { opacity: 0; transform: translateY(8px); } }
+  confirm-dialog:not(:defined) { display: none; }
+</style>
+</head>
+<body data-chapter="13">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 13 章</span>
+<h1>UI 元素</h1>
+<p class="lede">
+  对话框、折叠面板、弹出层、工具提示、系统通知 —— 这些界面元素过去都要靠第三方库或自己手写。
+  现在浏览器原生提供了 <code>&lt;dialog&gt;</code>、<code>&lt;details&gt;</code>、Popover API 和 Notification API，
+  它们自带键盘操作、焦点管理和无障碍语义，比大多数手写实现都更可靠。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>用 <code>&lt;dialog&gt;</code> 做提示框和确认框，理解 <code>returnValue</code>、<code>cancel</code>、<code>close</code> 事件</li>
+    <li>把确认框封装成返回 Promise 的 Web Component</li>
+    <li>用 <code>&lt;details&gt;</code> 做折叠面板（含互斥的「手风琴」）</li>
+    <li>用 Popover API 做弹出层和工具提示，并把它定位到触发按钮旁边（JS 方案与 CSS 锚点定位）</li>
+    <li>用 Notification API 发送系统通知</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">三种弹出方式对比</h2>
+
+<div class="tw">
+<table>
+  <tr><th></th><th><code>&lt;dialog&gt;</code> + <code>showModal()</code></th><th><code>popover</code>（auto）</th><th><code>&lt;details&gt;</code></th></tr>
+  <tr><td>遮罩（backdrop）</td><td>有，可用 <code>::backdrop</code> 设置样式</td><td>无</td><td>无（内容在文档流中展开）</td></tr>
+  <tr><td>能否操作页面其他部分</td><td>不能（模态）</td><td>能</td><td>能</td></tr>
+  <tr><td>点击外部</td><td>默认不关闭</td><td>自动关闭（light dismiss）</td><td>不适用</td></tr>
+  <tr><td>Esc 键</td><td>关闭</td><td>关闭</td><td>不适用</td></tr>
+  <tr><td>需要 JS 吗</td><td>需要（新的 <code>command</code> 属性可免 JS）</td><td>不需要</td><td>不需要</td></tr>
+  <tr><td>典型场景</td><td>确认、表单、必须处理的提示</td><td>菜单、提示、下拉面板</td><td>常见问题、高级设置</td></tr>
+</table>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="顶层 top layer 位于所有普通内容之上">
+  <g transform="translate(-120 0)">
+    <path d="M160 180 L360 200 L600 180 L400 160 Z" style="fill:var(--panel-2);stroke:var(--line-2);stroke-width:1.5"/>
+    <text class="sm" x="380" y="186" text-anchor="middle">普通文档内容（z-index 再大也在这一层之内）</text>
+    <path d="M160 130 L360 150 L600 130 L400 110 Z" style="fill:rgba(0,0,0,.18);stroke:var(--line-2);stroke-width:1.5"/>
+    <text class="sm" x="380" y="136" text-anchor="middle">::backdrop</text>
+    <path d="M220 70 L380 86 L560 70 L400 54 Z" class="bx-a" style="fill:var(--accent-bg);stroke:var(--accent);stroke-width:1.5"/>
+    <text class="sm on-a" x="390" y="76" text-anchor="middle">dialog / popover</text>
+  </g>
+  <text class="ttl on-a" x="520" y="60">顶层（top layer）</text>
+  <text class="sm" x="520" y="80">showModal() 的对话框、</text>
+  <text class="sm" x="520" y="96">打开的 popover 都放在这里</text>
+  <text class="sm" x="520" y="112">→ 不会被 overflow: hidden 裁切</text>
+  <text class="sm" x="520" y="128">→ 不需要和 z-index 较劲</text>
+  <text class="sm" x="20" y="222">这正是原生弹出元素最大的优势之一：不管它在 DOM 的哪个角落，打开时都浮在一切之上</text>
+</svg>
+<figcaption>图 13-1　浏览器的「顶层」：专门存放模态对话框和弹出层</figcaption>
+</figure>
+
+<h2 id="r13-1"><span class="rn">13.1</span>提示对话框</h2>
+
+<p class="prob">显示一个带「确定」按钮的简单提示框。</p>
+
+<div class="code" data-lang="html" data-file="13-01-dialog-markup.html">
+<script type="text/plain">
+<dialog id="alert">
+  <h2>Alert</h2>
+  <p>This is an alert dialog.</p>
+  <button type="button" id="ok-button">OK</button>
+</dialog>
+
+<button type="button" id="show-dialog">Show Dialog</button>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-02-dialog-js.js">
+<script type="text/plain">
+const dialog = document.querySelector('#alert');
+const okButton = document.querySelector('#ok-button');
+const trigger = document.querySelector('#show-dialog');
+
+// 点「确定」关闭
+okButton.addEventListener('click', () => {
+  dialog.close();
+});
+
+// 点触发按钮，以模态方式打开
+trigger.addEventListener('click', () => {
+  dialog.showModal();
+});
+</script>
+</div>
+
+<div class="code" data-lang="css" data-file="13-03-style-backdrop.css">
+<script type="text/plain">
+/* 遮罩层更暗一些 */
+#alert::backdrop {
+  background: rgba(0, 0, 0, 0.75);
+}
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：提示对话框（打开后试试 Tab 键和 Esc 键）</div>
+  <div class="b">
+    <button type="button" id="d1-open">Show Dialog</button>
+    <dialog id="d1">
+      <h2>提示</h2>
+      <p>这是一个原生 &lt;dialog&gt;。按 Tab 焦点只会在对话框里循环；按 Esc 也能关闭。</p>
+      <button type="button" id="d1-ok">确定</button>
+    </dialog>
+  </div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="模态对话框的焦点与关闭行为">
+  <rect class="bx" x="20" y="60" width="150" height="50" rx="8"/>
+  <text class="mono" x="95" y="82" text-anchor="middle">Show Dialog</text>
+  <text class="sm" x="95" y="100" text-anchor="middle">焦点在这里</text>
+  <path class="ln-a" d="M172 85 H236" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="204" y="76" text-anchor="middle">showModal()</text>
+
+  <rect class="bx-a" x="240" y="20" width="260" height="130" rx="12"/>
+  <text class="ttl on-a" x="370" y="44" text-anchor="middle">模态对话框</text>
+  <text class="sm" x="370" y="66" text-anchor="middle">焦点自动移到第一个可聚焦元素</text>
+  <text class="sm" x="370" y="82" text-anchor="middle">（或带 autofocus 的元素）</text>
+  <text class="sm" x="370" y="104" text-anchor="middle">Tab 只在对话框内循环（焦点陷阱）</text>
+  <text class="sm" x="370" y="120" text-anchor="middle">页面其他部分无法点击（inert）</text>
+  <path class="ln-g" d="M500 60 H560" marker-end="url(#ar-g)"/>
+  <text class="mono on-g" x="530" y="52" text-anchor="middle">close()</text>
+  <path class="ln-r" d="M500 110 H560" marker-end="url(#ar-r)"/>
+  <text class="mono on-r" x="530" y="102" text-anchor="middle">Esc</text>
+  <rect class="bx-g" x="564" y="60" width="176" height="50" rx="8"/>
+  <text class="sm on-g" x="652" y="82" text-anchor="middle">对话框关闭</text>
+  <text class="sm" x="652" y="100" text-anchor="middle">焦点回到 Show Dialog</text>
+  <text class="sm" x="380" y="180" text-anchor="middle">show()（非模态）：没有遮罩，页面其余部分仍可交互，没有焦点陷阱</text>
+</svg>
+<figcaption>图 13-2　showModal() 免费送你焦点管理</figcaption>
+</figure>
+
+<ul>
+  <li><code>showModal()</code> 打开<strong>模态</strong>对话框：页面其余部分不可交互，焦点被「困」在对话框内；<code>show()</code> 打开非模态对话框。</li>
+  <li>按 <strong>Esc</strong> 会先触发 <code>cancel</code> 事件，再触发 <code>close</code> 事件；调用 <code>close()</code> 只触发 <code>close</code>。</li>
+  <li>关闭后焦点会自动回到打开前的元素，这对键盘用户非常重要。</li>
+</ul>
+
+<div class="box tip">
+  <div class="t">&#128161; 不写 JS 的关闭按钮：<code>&lt;form method="dialog"&gt;</code></div>
+  <p>对话框里的表单如果 <code>method="dialog"</code>，提交时不会发请求，而是关闭对话框，并把提交按钮的 <code>value</code> 设为 <code>returnValue</code>：</p>
+  <div class="code" data-lang="html">
+<script type="text/plain">
+<dialog id="confirm">
+  <form method="dialog">
+    <p>确定要删除吗？</p>
+    <button value="cancel">取消</button>
+    <button value="confirm">确定</button>
+  </form>
+</dialog>
+</script>
+  </div>
+</div>
+
+<h2 id="r13-2"><span class="rn">13.2</span>确认对话框</h2>
+
+<p class="prob">操作前请用户确认：显示一个问题和「确认」「取消」两个按钮，根据选择执行不同逻辑。</p>
+
+<div class="code" data-lang="html" data-file="13-04-confirm-markup.html">
+<script type="text/plain">
+<dialog id="confirm">
+  <h2>Confirm</h2>
+  <p>Are you sure you want to do that?</p>
+  <button type="button" class="confirm-button">Confirm</button>
+  <button type="button" class="cancel-button">Cancel</button>
+</dialog>
+</script>
+</div>
+
+<p>两个按钮都关闭对话框，但传给 <code>close()</code> 的参数不同。这个参数会成为对话框的 <code>returnValue</code>，在 <code>close</code> 事件里读取：</p>
+
+<div class="code" data-lang="js" data-file="13-05-event-listeners.js">
+<script type="text/plain">
+const dialog = document.querySelector('#confirm');
+// 原书漏掉了下面两行按钮的获取
+const confirmButton = dialog.querySelector('.confirm-button');
+const cancelButton = dialog.querySelector('.cancel-button');
+
+confirmButton.addEventListener('click', () => {
+  dialog.close('confirm');   // returnValue = 'confirm'
+});
+
+cancelButton.addEventListener('click', () => {
+  dialog.close('cancel');    // returnValue = 'cancel'
+});
+
+dialog.addEventListener('cancel', () => {
+  // 按 Esc 关闭时不会设置 returnValue，这里手动设为 'cancel'，
+  // 让下面的 close 处理函数拿到正确的值
+  dialog.returnValue = 'cancel';
+});
+
+dialog.addEventListener('close', () => {
+  if (dialog.returnValue === 'confirm') {
+    // 用户点了确认：执行操作（如创建或删除数据）
+  } else {
+    // 用户点了取消或按了 Esc：什么都不做
+  }
+});
+</script>
+</div>
+
+<h3>为什么要处理 cancel 事件？</h3>
+
+<p>关闭对话框<strong>并不会销毁它</strong>，它仍然在 DOM 里，<code>returnValue</code> 也保留着上一次的值：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="不处理 cancel 事件时 returnValue 残留的问题">
+  <path class="ln" d="M20 120 H740" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="30" y="40" width="200" height="56" rx="8"/>
+  <text class="lbl on-g" x="130" y="62" text-anchor="middle">第一次：点「确认」</text>
+  <text class="mono" x="130" y="82" text-anchor="middle">returnValue='confirm'</text>
+  <rect class="bx-r" x="280" y="40" width="220" height="56" rx="8"/>
+  <text class="lbl on-r" x="390" y="62" text-anchor="middle">第二次：按 Esc 取消</text>
+  <text class="mono" x="390" y="82" text-anchor="middle">returnValue 仍是 'confirm'!</text>
+  <rect class="bx-r" x="550" y="40" width="190" height="56" rx="8"/>
+  <text class="lbl on-r" x="645" y="62" text-anchor="middle">close 处理函数</text>
+  <text class="sm on-r" x="645" y="82" text-anchor="middle">误以为用户确认了 → 删数据</text>
+  <path class="ln-r" d="M502 68 H546" marker-end="url(#ar-r)"/>
+  <text class="sm on-g" x="380" y="150" text-anchor="middle">修复：在 cancel 事件（Esc 触发，先于 close）里把 returnValue 设为 'cancel'</text>
+  <text class="sm" x="380" y="170" text-anchor="middle">或者每次 showModal() 之前先把 returnValue 重置为 ''</text>
+</svg>
+<figcaption>图 13-3　「残留的 returnValue」是一个隐蔽的 bug</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：确认对话框</div>
+  <div class="b">
+    <button type="button" id="d2-open">删除文件…</button>
+    <dialog id="d2">
+      <h2>确认</h2>
+      <p>确定要删除这个文件吗？</p>
+      <button type="button" class="confirm-button">确认</button>
+      <button type="button" class="cancel-button">取消</button>
+    </dialog>
+    <div class="out" id="d2-out" style="min-height:0">close 事件中读取的 returnValue 会显示在这里</div>
+  </div>
+</div>
+
+<h2 id="r13-3"><span class="rn">13.3</span>确认对话框 Web Component</h2>
+
+<p class="prob">你希望「弹出确认框」像调用函数一样简单：<code>if (await dialog.showConfirmation()) { … }</code>。</p>
+
+<div class="code" data-lang="js" data-file="13-06-template.js">
+<script type="text/plain">
+const template = document.createElement('template');
+template.innerHTML = `
+  <dialog id="confirm">
+    <h2>Confirm</h2>
+    <p><slot></slot></p>
+    <button type="button" class="confirm-button">Confirm</button>
+    <button type="button" class="cancel-button">Cancel</button>
+  </dialog>
+`;
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-07-dialog-implementation.js（已调整）">
+<script type="text/plain">
+class ConfirmDialog extends HTMLElement {
+  // 原书在 connectedCallback 里 attachShadow：元素被移动后再次插入时，
+  // 第二次 attachShadow 会抛异常。放到 constructor 里只执行一次
+  constructor() {
+    super();
+    const shadowRoot = this.attachShadow({ mode: 'open' });
+    shadowRoot.appendChild(template.content.cloneNode(true));
+
+    this.dialog = shadowRoot.querySelector('dialog');
+    this.dialog.addEventListener('cancel', () => {
+      this.dialog.returnValue = 'cancel';
+    });
+    shadowRoot.querySelector('.confirm-button').addEventListener('click', () => {
+      this.dialog.close('confirm');
+    });
+    shadowRoot.querySelector('.cancel-button').addEventListener('click', () => {
+      this.dialog.close('cancel');
+    });
+  }
+
+  showConfirmation() {
+    this.dialog.showModal();   // 配套代码仓库误写成了 this.dialog.showConfirmation()
+
+    return new Promise(resolve => {
+      // 只监听下一次 close 事件，用「是否确认」兑现 Promise
+      this.dialog.addEventListener('close', () => {
+        resolve(this.dialog.returnValue === 'confirm');
+      }, { once: true });   // 触发一次后自动移除监听
+    });
+  }
+}
+
+customElements.define('confirm-dialog', ConfirmDialog);
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="13-08 / 13-10">
+<script type="text/plain">
+<style>
+  /* 和第 12 章一样，防止组件注册前子内容闪现 */
+  confirm-dialog:not(:defined) { display: none; }
+</style>
+
+<confirm-dialog id="confirm-delete">
+  Are you sure you want to delete this item?
+</confirm-dialog>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-09-using.js">
+<script type="text/plain">
+const confirmDialog = document.querySelector('#confirm-delete');
+if (await confirmDialog.showConfirmation()) {
+  // 执行删除
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="组件把多个事件封装成一个 Promise">
+  <rect class="bx-d" x="20" y="20" width="440" height="120" rx="10"/>
+  <text class="sm" x="36" y="40">组件内部（使用者看不到）</text>
+  <rect class="bx" x="40" y="54" width="120" height="30" rx="6"/><text class="sm" x="100" y="74" text-anchor="middle">confirm 按钮</text>
+  <rect class="bx" x="40" y="92" width="120" height="30" rx="6"/><text class="sm" x="100" y="112" text-anchor="middle">cancel 按钮 / Esc</text>
+  <path class="ln" d="M162 69 H220 V88" /><path class="ln" d="M162 107 H220 V92" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="226" y="70" width="100" height="36" rx="6"/><text class="mono on-p" x="276" y="93" text-anchor="middle">close 事件</text>
+  <path class="ln-p" d="M328 88 H370" marker-end="url(#ar-p)"/>
+  <rect class="bx-g" x="374" y="64" width="76" height="48" rx="6"/><text class="mono on-g" x="412" y="84" text-anchor="middle">resolve</text><text class="sm" x="412" y="100" text-anchor="middle">(bool)</text>
+  <path class="ln-g" d="M462 88 H520" marker-end="url(#ar-g)"/>
+  <rect class="bx-a" x="524" y="54" width="216" height="68" rx="10"/>
+  <text class="mono on-a" x="632" y="80" text-anchor="middle">if (await dialog</text>
+  <text class="mono on-a" x="632" y="100" text-anchor="middle">.showConfirmation())</text>
+  <text class="sm" x="632" y="150" text-anchor="middle">使用者只看到一行代码</text>
+</svg>
+<figcaption>图 13-4　把「多个按钮 + 多个事件」封装成一个 Promise</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：await showConfirmation()</div>
+  <div class="b">
+    <confirm-dialog id="cd">确定要删除这个项目吗？</confirm-dialog>
+    <button type="button" id="cd-open">删除项目</button>
+    <div class="out" id="cd-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r13-4"><span class="rn">13.4</span>折叠面板：details 元素</h2>
+
+<p class="prob">用一个开关按钮显示或隐藏一段内容。</p>
+
+<p>第 12 章我们手写了一个折叠组件，而浏览器早就内置了：</p>
+
+<div class="code" data-lang="html" data-file="13-11 / 13-12">
+<script type="text/plain">
+<details>
+  <summary>More Info</summary>
+  Here are some extra details that you can toggle.
+</details>
+
+<!-- 加上 open 属性则默认展开 -->
+<details open>
+  <summary>More Info</summary>
+  This content is visible by default.
+</details>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-13-toggle.js">
+<script type="text/plain">
+// 用 JS 展开
+document.querySelector('details').open = true;
+
+// 状态变化时会触发 toggle 事件
+details.addEventListener('toggle', () => {
+  console.log(details.open ? '展开了' : '收起了');
+});
+</script>
+</div>
+
+<p><code>&lt;summary&gt;</code> 自动成为可聚焦、可用键盘（Enter / 空格）操作的按钮，屏幕阅读器也会报告它的展开 / 收起状态。</p>
+
+<div class="box new">
+  <div class="t">&#10024; 手风琴：同一 name 的 details 互斥</div>
+  <p>给一组 <code>&lt;details&gt;</code> 设置相同的 <code>name</code>，打开其中一个时其他的会自动关闭 —— 不需要一行 JS。<span class="bl newly">Baseline 2024</span></p>
+  <div class="code" data-lang="html">
+<script type="text/plain">
+<details name="faq"><summary>如何注册？</summary>……</details>
+<details name="faq"><summary>如何退款？</summary>……</details>
+<details name="faq"><summary>如何联系客服？</summary>……</details>
+</script>
+  </div>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：普通 details 与 name 互斥的手风琴</div>
+  <div class="b">
+    <details><summary>More Info（独立）</summary><p style="margin:6px 0">Here are some extra details that you can toggle.</p></details>
+    <details name="faq"><summary>手风琴 1：如何注册？</summary><p style="margin:6px 0">点击右上角「注册」。</p></details>
+    <details name="faq"><summary>手风琴 2：如何退款？</summary><p style="margin:6px 0">在订单页点击「申请退款」。</p></details>
+    <details name="faq"><summary>手风琴 3：如何联系客服？</summary><p style="margin:6px 0">发送邮件到 help@example.com。</p></details>
+  </div>
+</div>
+
+<h2 id="r13-5"><span class="rn">13.5</span>显示弹出层（Popover）</h2>
+
+<p class="prob">点击按钮弹出一块内容，但用户仍然可以操作页面的其他部分。</p>
+
+<div class="code" data-lang="html" data-file="13-14-automatic.html">
+<script type="text/plain">
+<button type="button" popovertarget="greeting">Open Popover</button>
+<div popover id="greeting">Hello world!</div>
+</script>
+</div>
+
+<p>
+  零 JS：给元素加 <code>popover</code> 属性（它就会默认隐藏），给按钮加 <code>popovertarget="元素 id"</code>，点击按钮就能开关。
+  与对话框不同：没有遮罩，不阻挡页面，<strong>点击弹出层外部会自动关闭</strong>（称为 light dismiss），按 Esc 也会关闭。
+  同一时刻只会有一个 auto 弹出层是打开的（除非它们是嵌套关系），打开新的会关闭旧的。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="auto 与 manual 两种 popover 的区别">
+  <rect class="bx-b" x="20" y="20" width="350" height="130" rx="10"/>
+  <text class="ttl on-b" x="195" y="44" text-anchor="middle">popover（= "auto"）</text>
+  <text class="sm" x="40" y="70">✓ 点击外部 / Esc 自动关闭</text>
+  <text class="sm" x="40" y="90">✓ 打开另一个 auto 弹出层时自动关闭</text>
+  <text class="sm" x="40" y="110">适合：菜单、下拉选择、临时面板</text>
+  <text class="mono" x="40" y="134">popovertarget 即可控制</text>
+
+  <rect class="bx-a" x="390" y="20" width="350" height="130" rx="10"/>
+  <text class="ttl on-a" x="565" y="44" text-anchor="middle">popover="manual"</text>
+  <text class="sm" x="410" y="70">✗ 点击外部不会关闭，Esc 也不会</text>
+  <text class="sm" x="410" y="90">✓ 可以同时打开多个</text>
+  <text class="sm" x="410" y="110">适合：通知吐司、工具提示、需要代码控制的场景</text>
+  <text class="mono" x="410" y="134">showPopover / hidePopover / togglePopover</text>
+</svg>
+<figcaption>图 13-5　两种 popover 模式</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：auto popover（点页面其他地方会关闭）</div>
+  <div class="b">
+    <button type="button" popovertarget="pop-auto">Open Popover</button>
+    <div popover id="pop-auto">Hello world! 👋 点击外部或按 Esc 关闭我。</div>
+    <p class="hint" style="margin-top:8px">原书写作时 Popover API 还是新特性；现在它已是 <span class="bl newly">Baseline 2024</span>。</p>
+  </div>
+</div>
+
+<h2 id="r13-6"><span class="rn">13.6</span>手动控制弹出层</h2>
+
+<p class="prob">你想用 JS 自己决定弹出层什么时候显示、什么时候隐藏。</p>
+
+<div class="code" data-lang="html" data-file="13-15-trigger-markup.html">
+<script type="text/plain">
+<button type="button" id="trigger">Show Popover</button>
+<div id="greeting" popover="manual">Hello World!</div>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-16-toggle.js">
+<script type="text/plain">
+const trigger = document.querySelector('#trigger');
+const popover = document.querySelector('#greeting');
+
+trigger.addEventListener('click', () => {
+  popover.togglePopover();   // 隐藏时显示，显示时隐藏
+});
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：manual popover（点外部不会关闭）</div>
+  <div class="b">
+    <button type="button" id="pm-btn">togglePopover()</button>
+    <div popover="manual" id="pop-manual">我是 manual 弹出层，只能用按钮关闭。</div>
+  </div>
+</div>
+
+<h2 id="r13-7"><span class="rn">13.7</span>把弹出层定位到元素旁边</h2>
+
+<p class="prob">弹出层默认出现在屏幕正中，你希望它出现在触发按钮的正下方。</p>
+
+<div class="code" data-lang="css" data-file="13-17-popover-styles.css">
+<script type="text/plain">
+.popover {
+  margin: 0;          /* 浏览器默认用 margin: auto 把弹出层居中，先去掉 */
+  margin-top: 1em;    /* 与触发按钮之间留一点距离 */
+  position: absolute;
+}
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="13-18-popover-markup.html">
+<script type="text/plain">
+<button type="button" class="trigger" popovertarget="popover">Show Popover</button>
+<div class="popover" id="popover" popover>
+  This is popover content anchored to the trigger button.
+</div>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-19-popover-position.js">
+<script type="text/plain">
+const popover = document.querySelector('.popover');
+const trigger = document.querySelector('.trigger');
+
+// 弹出层显示或隐藏时都会触发 toggle 事件
+popover.addEventListener('toggle', event => {
+  if (event.newState === 'open') {
+    // 触发按钮相对视口的位置
+    const triggerRect = trigger.getBoundingClientRect();
+
+    // 弹出层在顶层中，absolute 是相对于整个文档定位的，所以要加上滚动距离
+    popover.style.top = `${triggerRect.bottom + window.scrollY}px`;
+    popover.style.left = `${triggerRect.left}px`;
+  }
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="用 getBoundingClientRect 和 scrollY 计算弹出层位置">
+  <rect class="bx-d" x="20" y="10" width="420" height="210" rx="8"/>
+  <text class="sm" x="430" y="28" text-anchor="end">整个文档（顶部已被滚出屏幕）</text>
+  <rect class="bx-a" x="40" y="60" width="380" height="150" rx="6" style="fill:none;stroke-width:2.5"/>
+  <text class="sm on-a" x="412" y="78" text-anchor="end">视口</text>
+  <path class="ln-p" d="M60 12 V58" marker-end="url(#ar-p)"/>
+  <text class="mono on-p" x="68" y="42" style="font-size:11px">scrollY</text>
+  <path class="ln-b" d="M140 62 V138" marker-end="url(#ar-b)"/>
+  <text class="mono on-b" x="134" y="104" text-anchor="end" style="font-size:11px">rect.bottom</text>
+  <rect class="bx-b" x="150" y="110" width="130" height="30" rx="6"/>
+  <text class="sm on-b" x="215" y="130" text-anchor="middle">trigger 按钮</text>
+  <rect class="bx-g" x="150" y="156" width="200" height="34" rx="6"/>
+  <text class="sm on-g" x="250" y="177" text-anchor="middle">popover（margin-top: 1em）</text>
+
+  <text class="mono" x="470" y="60">getBoundingClientRect()</text>
+  <text class="sm" x="470" y="80">返回相对「视口」的坐标，</text>
+  <text class="sm" x="470" y="96">滚动时会变化</text>
+  <text class="mono on-g" x="470" y="130">top = rect.bottom + scrollY</text>
+  <text class="mono on-g" x="470" y="150">left = rect.left</text>
+  <text class="sm" x="470" y="176">把「视口坐标」换算成「文档坐标」</text>
+</svg>
+<figcaption>图 13-6　视口坐标 + 滚动距离 = 文档坐标</figcaption>
+</figure>
+
+<p>
+  你可能会疑惑：<code>position: absolute</code> 通常相对于最近的已定位祖先元素，这里为什么是相对整个文档？
+  因为打开的弹出层被放进了图 13-1 中的<strong>顶层</strong>，无论它在 DOM 的哪里，都不再受祖先元素影响。
+  （原书正文说「设置 position: fixed」，但示例代码用的是 <code>absolute</code>：<code>fixed</code> 相对视口、不随页面滚动，<code>absolute</code> 则需要加上 <code>scrollY</code>。）
+</p>
+
+<p>这个方案有两个局限：按钮靠近页面底部时，下方可能放不下弹出层（需要判断后改到上方）；窗口大小变化时位置不会自动更新（需要 <code>resize</code> 事件或 ResizeObserver）。</p>
+
+<div class="box new">
+  <div class="t">&#10024; CSS 锚点定位：原书期待的「未来」</div>
+  <p>
+    书中说「将来可以用 CSS 锚点定位把弹出层定位到触发元素」。这个未来已经基本到来：Chrome/Edge 125+ 与 Safari 26 已支持，Firefox 正在跟进。<span class="bl limited">有限支持</span>
+    它由浏览器实时计算位置，滚动、缩放都能自动跟随，空间不够时还能自动翻转到另一侧：
+  </p>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+.trigger { anchor-name: --my-anchor; }        /* 给触发按钮起一个锚点名 */
+
+.popover {
+  position-anchor: --my-anchor;               /* 相对这个锚点定位 */
+  position-area: bottom span-right;           /* 放在锚点下方，向右展开 */
+  margin: 6px 0 0;
+  position-try-fallbacks: flip-block;         /* 下面放不下就翻到上面 */
+}
+</script>
+  </div>
+  <p>不支持的浏览器可以继续使用上面的 JS 方案，或者使用 <a href="https://floating-ui.com">Floating UI</a> 等库。</p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：JS 定位 vs CSS 锚点定位</div>
+  <div class="b">
+    <div class="row">
+      <button type="button" class="pos-trigger" popovertarget="pos-pop">JS 计算位置</button>
+      <button type="button" id="anchor-btn" popovertarget="anchor-pop">CSS 锚点定位</button>
+    </div>
+    <div class="pos-popover" id="pos-pop" popover>我由 toggle 事件里的 JS 定位到按钮下方。</div>
+    <div id="anchor-pop" popover>我由 CSS anchor-name / position-anchor 定位。<span id="anchor-note"></span></div>
+  </div>
+</div>
+
+<h2 id="r13-8"><span class="rn">13.8</span>工具提示（Tooltip）</h2>
+
+<p class="prob">鼠标悬停或键盘聚焦到一个元素时，显示一段提示文字。</p>
+
+<div class="code" data-lang="css" data-file="13-20-tooltip-styles.css">
+<script type="text/plain">
+#tooltip {
+  margin: 0;
+  margin-top: 1em;
+  position: absolute;
+}
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="13-21-tooltip-markup.html">
+<script type="text/plain">
+<button type="button" id="trigger" aria-describedby="tooltip">Hover Me</button>
+<div id="tooltip" popover="manual" role="tooltip">Here is some tooltip content</div>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-22-show-hide.js（已修正）">
+<script type="text/plain">
+const button = document.querySelector('#trigger');
+const tooltip = document.querySelector('#tooltip');
+
+function showTooltip() {
+  // 原书这里写的是 trigger，但变量名是 button
+  const triggerRect = button.getBoundingClientRect();
+  tooltip.style.top = `${triggerRect.bottom + window.scrollY}px`;
+  tooltip.style.left = `${triggerRect.left}px`;
+  tooltip.showPopover();
+}
+
+// 鼠标：用 mouseenter / mouseleave，避免子元素引起的反复触发
+button.addEventListener('mouseenter', () => showTooltip());
+button.addEventListener('mouseleave', () => tooltip.hidePopover());
+
+// 键盘无障碍：聚焦时同样显示
+button.addEventListener('focus', () => showTooltip());
+button.addEventListener('blur', () => tooltip.hidePopover());
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：悬停或用 Tab 聚焦按钮</div>
+  <div class="b">
+    <button type="button" id="tt-btn" aria-describedby="demo-tooltip">Hover Me</button>
+    <div id="demo-tooltip" popover="manual" role="tooltip">Here is some tooltip content</div>
+  </div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 为什么用 manual？</div>
+  <p>
+    工具提示由悬停控制，不应该因为「点击外部」而被关掉，也不应该关掉用户已经打开的其他 auto 弹出层（比如一个菜单）。
+    Chromium 正在试验专为提示设计的 <code>popover="hint"</code> 和声明式的 <code>interestfor</code> 属性（悬停自动显示），目前尚未普及。<span class="bl limited">有限支持</span>
+  </p>
+</div>
+
+<h2 id="r13-9"><span class="rn">13.9</span>系统通知</h2>
+
+<p class="prob">当应用里发生了某件事（新消息、任务完成），用操作系统的原生通知提醒用户。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="通知权限的三种状态">
+  <rect class="bx" x="20" y="60" width="150" height="56" rx="10"/>
+  <text class="mono" x="95" y="84" text-anchor="middle">'default'</text>
+  <text class="sm" x="95" y="102" text-anchor="middle">还没问过（视同拒绝）</text>
+  <path class="ln-a" d="M172 88 H236" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="204" y="80" text-anchor="middle">request</text>
+  <text class="sm on-a" x="204" y="112" text-anchor="middle">Permission()</text>
+  <rect class="bx-a" x="240" y="50" width="200" height="76" rx="10"/>
+  <text class="lbl on-a" x="340" y="78" text-anchor="middle">浏览器弹出授权提示</text>
+  <text class="sm" x="340" y="98" text-anchor="middle">「example.com 想要</text>
+  <text class="sm" x="340" y="114" text-anchor="middle">显示通知」</text>
+  <path class="ln-g" d="M442 70 L516 44" marker-end="url(#ar-g)"/>
+  <path class="ln-r" d="M442 106 L516 132" marker-end="url(#ar-r)"/>
+  <rect class="bx-g" x="520" y="20" width="220" height="46" rx="10"/>
+  <text class="mono on-g" x="630" y="40" text-anchor="middle">'granted'</text>
+  <text class="sm" x="630" y="56" text-anchor="middle">new Notification(…) 可以显示</text>
+  <rect class="bx-r" x="520" y="110" width="220" height="46" rx="10"/>
+  <text class="mono on-r" x="630" y="130" text-anchor="middle">'denied'</text>
+  <text class="sm" x="630" y="146" text-anchor="middle">再也不能弹窗询问，只能用户手动改设置</text>
+</svg>
+<figcaption>图 13-7　Notification.permission 的三个取值</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="13-23-permissions.js">
+<script type="text/plain">
+async function getPermission() {
+  // 用户已明确拒绝就别再问了（浏览器也不会再弹窗）
+  if (Notification.permission !== 'denied') {
+    // 请求结果会更新 Notification.permission；该方法返回 Promise
+    await Notification.requestPermission();
+  }
+
+  // 只有 granted 才能显示通知
+  return Notification.permission === 'granted';
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="13-24-show-notification.js">
+<script type="text/plain">
+if (await getPermission()) {
+  const notification = new Notification('Hello!', {
+    body: 'This is a test notification',
+    // icon: '/icon.png', tag: 'chat-42'（相同 tag 的通知会互相替换）
+  });
+
+  notification.addEventListener('click', () => {
+    window.focus();          // 用户点击通知时，把页面切到前台
+    notification.close();
+  });
+}
+</script>
+</div>
+
+<ul>
+  <li>只能在<strong>安全上下文</strong>中使用：HTTPS 页面或 <code>localhost</code>。</li>
+  <li>通知对象还有 <code>show</code>、<code>close</code>、<code>click</code>、<code>error</code> 事件；未授权时创建通知会触发 <code>error</code>。</li>
+  <li><strong>请在用户操作之后再请求权限</strong>（比如点击「开启提醒」按钮）。页面一打开就弹授权框，大多数用户会直接拒绝，Firefox 和 Safari 甚至会忽略非用户手势触发的请求。</li>
+</ul>
+
+<div class="box note">
+  <div class="t">&#9432; 通知 vs 推送通知</div>
+  <p>
+    本节的通知只能在<strong>页面打开期间</strong>由页面代码创建。想在用户没打开网站时也能收到提醒（像手机 App 那样），需要
+    <strong>推送通知</strong>：Service Worker + Push API + 服务器端的推送服务。iOS / iPadOS 上的 Safari 只允许「已添加到主屏幕」的 Web 应用使用通知。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：请求权限并发送一条通知</div>
+  <div class="b">
+    <div class="row"><button id="nt-btn">发送测试通知</button><span class="hint" id="nt-state"></span></div>
+  </div>
+</div>
+
+<h2 id="modern">现代补充：用属性代替 JS</h2>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<!-- 1. 调用命令（Invoker Commands）：按钮直接控制对话框和弹出层，零 JS -->
+<button commandfor="my-dialog" command="show-modal">打开对话框</button>
+<dialog id="my-dialog">
+  <p>Hello!</p>
+  <button commandfor="my-dialog" command="close">关闭</button>
+</dialog>
+
+<!-- 2. 点击遮罩关闭模态对话框（light dismiss） -->
+<dialog closedby="any"> … </dialog>
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>特性</th><th>作用</th><th>支持</th></tr>
+  <tr><td><code>command</code> / <code>commandfor</code></td><td><code>show-modal</code>、<code>close</code>、<code>toggle-popover</code> 等命令，无需 JS</td><td><span class="bl newly">Baseline 2025</span></td></tr>
+  <tr><td><code>&lt;dialog closedby="any"&gt;</code></td><td>点击遮罩关闭对话框</td><td><span class="bl limited">有限支持</span></td></tr>
+  <tr><td><code>@starting-style</code> + <code>transition-behavior: allow-discrete</code></td><td>对话框 / 弹出层的入场与退场动画（本页演示中已使用）</td><td><span class="bl newly">Baseline 2024</span></td></tr>
+  <tr><td>CSS 锚点定位</td><td>弹出层自动贴着触发元素</td><td><span class="bl limited">有限支持</span></td></tr>
+</table>
+</div>
+
+<div class="code" data-lang="css" data-file="对话框入场动画">
+<script type="text/plain">
+dialog[open] {
+  opacity: 1;
+  transform: none;
+  transition: opacity .2s, transform .2s,
+              overlay .2s allow-discrete, display .2s allow-discrete;
+}
+@starting-style {
+  dialog[open] { opacity: 0; transform: translateY(8px); }   /* 从这里开始过渡 */
+}
+</script>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li><code>&lt;dialog&gt;</code>：<code>showModal()</code> 模态 / <code>show()</code> 非模态；<code>close(value)</code> 设置 <code>returnValue</code>；Esc 触发 <code>cancel</code> 再触发 <code>close</code>。</li>
+  <li>关闭的对话框仍在 DOM 中，<code>returnValue</code> 会残留，需要在 <code>cancel</code> 中或打开前重置。</li>
+  <li>把「多个事件」封装成返回 Promise 的方法，调用方只需 <code>await</code>。</li>
+  <li><code>&lt;details&gt;</code> + <code>&lt;summary&gt;</code> 是零 JS 的折叠面板；相同 <code>name</code> 组成手风琴。</li>
+  <li>Popover：<code>popover</code> + <code>popovertarget</code> 零 JS；<code>manual</code> 模式用 <code>showPopover / hidePopover / togglePopover</code>。打开的弹出层位于顶层。</li>
+  <li>定位：JS 用 <code>getBoundingClientRect() + scrollY</code>；新浏览器可用 CSS 锚点定位。</li>
+  <li>通知：安全上下文、用户操作后请求权限、<code>granted</code> 后才能 <code>new Notification()</code>。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个「编辑个人资料」对话框：里面是一个表单，用 <code>&lt;form method="dialog"&gt;</code> 实现保存和取消，关闭后根据 <code>returnValue</code> 决定是否更新页面。</li>
+    <li>把 13.3 节的组件扩展为 <code>showPrompt(message)</code>：对话框里有一个输入框，Promise 兑现为用户输入的文字，取消时兑现为 <code>null</code>。</li>
+    <li>给 13.7 节的 JS 定位加上「下方空间不够时显示在上方」的判断（提示：比较 <code>rect.bottom + popover.offsetHeight</code> 与 <code>window.innerHeight</code>）。</li>
+    <li>做一个番茄钟：倒计时结束时发送系统通知，点击通知把页面切回前台。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // 13.1
+  var d1 = document.getElementById('d1');
+  document.getElementById('d1-open').onclick = function () { d1.showModal(); };
+  document.getElementById('d1-ok').onclick = function () { d1.close(); };
+
+  // 13.2
+  var d2 = document.getElementById('d2'), d2out = document.getElementById('d2-out'), d2log = [];
+  document.getElementById('d2-open').onclick = function () { d2log = []; d2.showModal(); };
+  d2.querySelector('.confirm-button').onclick = function () { d2.close('confirm'); };
+  d2.querySelector('.cancel-button').onclick = function () { d2.close('cancel'); };
+  d2.addEventListener('cancel', function () { d2.returnValue = 'cancel'; d2log.push('cancel 事件（Esc）→ 手动把 returnValue 设为 cancel'); });
+  d2.addEventListener('close', function () {
+    d2log.push('close 事件：returnValue = ' + JSON.stringify(d2.returnValue) + (d2.returnValue === 'confirm' ? ' → 执行删除' : ' → 不执行'));
+    d2out.textContent = d2log.join('\n');
+  });
+
+  // 13.3
+  var cdTpl = document.createElement('template');
+  cdTpl.innerHTML = '<style>dialog{border:1px solid #bbb;border-radius:12px;padding:18px 22px;max-width:340px}dialog::backdrop{background:rgba(0,0,0,.55)}h2{margin:0 0 6px;font-size:18px}button{font:inherit;padding:4px 14px;margin-right:6px;cursor:pointer}</style>' +
+    '<dialog><h2>确认</h2><p><slot></slot></p><button type="button" class="confirm-button">确认</button><button type="button" class="cancel-button">取消</button></dialog>';
+  customElements.define('confirm-dialog', class extends HTMLElement {
+    constructor() {
+      super();
+      var sr = this.attachShadow({ mode: 'open' }); sr.appendChild(cdTpl.content.cloneNode(true));
+      var dlg = this.dialog = sr.querySelector('dialog');
+      dlg.addEventListener('cancel', function () { dlg.returnValue = 'cancel'; });
+      sr.querySelector('.confirm-button').addEventListener('click', function () { dlg.close('confirm'); });
+      sr.querySelector('.cancel-button').addEventListener('click', function () { dlg.close('cancel'); });
+    }
+    showConfirmation() {
+      var dlg = this.dialog; dlg.returnValue = ''; dlg.showModal();
+      return new Promise(function (resolve) { dlg.addEventListener('close', function () { resolve(dlg.returnValue === 'confirm'); }, { once: true }); });
+    }
+  });
+  document.getElementById('cd-open').onclick = async function () {
+    var ok = await document.getElementById('cd').showConfirmation();
+    document.getElementById('cd-out').textContent = 'await showConfirmation() → ' + ok + (ok ? '（执行删除）' : '（取消）');
+  };
+
+  // 13.6
+  var pm = document.getElementById('pop-manual');
+  document.getElementById('pm-btn').onclick = function () { pm.togglePopover(); };
+
+  // 13.7
+  var pos = document.getElementById('pos-pop'), posTrig = document.querySelector('.pos-trigger');
+  pos.addEventListener('toggle', function (e) {
+    if (e.newState === 'open') {
+      var r = posTrig.getBoundingClientRect();
+      pos.style.top = (r.bottom + window.scrollY) + 'px';
+      pos.style.left = (r.left + window.scrollX) + 'px';
+    }
+  });
+  if (!CSS.supports('anchor-name: --x')) {
+    document.getElementById('anchor-note').textContent = '（你的浏览器不支持锚点定位，所以我出现在了屏幕中央）';
+  }
+
+  // 13.8
+  var tb = document.getElementById('tt-btn'), tt = document.getElementById('demo-tooltip');
+  function showTip() {
+    var r = tb.getBoundingClientRect();
+    tt.style.top = (r.bottom + window.scrollY) + 'px';
+    tt.style.left = (r.left + window.scrollX) + 'px';
+    if (!tt.matches(':popover-open')) tt.showPopover();
+  }
+  function hideTip() { if (tt.matches(':popover-open')) tt.hidePopover(); }
+  tb.addEventListener('mouseenter', showTip); tb.addEventListener('mouseleave', hideTip);
+  tb.addEventListener('focus', showTip); tb.addEventListener('blur', hideTip);
+
+  // 13.9
+  var ns = document.getElementById('nt-state');
+  if (!('Notification' in window)) { ns.textContent = '当前浏览器不支持 Notification API'; document.getElementById('nt-btn').disabled = true; }
+  else ns.textContent = 'Notification.permission = ' + Notification.permission;
+  document.getElementById('nt-btn').onclick = async function () {
+    if (Notification.permission !== 'denied') await Notification.requestPermission();
+    ns.textContent = 'Notification.permission = ' + Notification.permission;
+    if (Notification.permission === 'granted') {
+      var n = new Notification('Web API 实战教程', { body: '这是一条来自第 13 章的测试通知 🎉' });
+      n.onclick = function () { window.focus(); n.close(); };
+    }
+  };
+})();
+</script>
+</body>
+</html>

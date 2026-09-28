@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 14 章 · 设备集成 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="14">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 14 章</span>
+<h1>设备集成</h1>
+<p class="lede">
+  网页不只能显示内容，还能感知它所运行的设备：电量、网络、位置、剪贴板、系统分享、振动、屏幕方向……
+  这些 API 的共同点是：<strong>支持程度参差不齐，并且大多涉及隐私</strong>。所以本章的每一节都会同时讲「怎么用」和「怎么安全地降级」。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>读取电池状态与网络状态，并监听变化</li>
+    <li>获取地理位置、持续跟踪位置，并在地图上显示</li>
+    <li>用异步剪贴板 API 复制粘贴文本</li>
+    <li>调用系统原生分享面板，让设备振动，读取屏幕方向</li>
+    <li>理解「安全上下文」「用户激活」「权限」三道门槛，以及 Permissions API</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">设备 API 的三道门槛</h2>
+
+<p>
+  同一个 API 在一个浏览器里能用、在另一个里不能用是常事；即使浏览器支持，设备本身也可能没有对应硬件（比如笔记本电脑不会振动）。
+  除此之外，为了保护用户，大多数设备 API 还设置了门槛：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="使用设备 API 前需要通过的三道门槛">
+  <rect class="bx-b" x="20" y="50" width="200" height="90" rx="10"/>
+  <text class="ttl on-b" x="120" y="74" text-anchor="middle">① 安全上下文</text>
+  <text class="sm" x="120" y="96" text-anchor="middle">页面必须是 HTTPS</text>
+  <text class="sm" x="120" y="112" text-anchor="middle">（或 localhost）</text>
+  <text class="mono" x="120" y="130" text-anchor="middle">isSecureContext</text>
+  <path class="ln" d="M222 95 H266" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="270" y="50" width="210" height="90" rx="10"/>
+  <text class="ttl on-a" x="375" y="74" text-anchor="middle">② 用户激活</text>
+  <text class="sm" x="375" y="96" text-anchor="middle">必须在点击、按键等</text>
+  <text class="sm" x="375" y="112" text-anchor="middle">用户操作中调用</text>
+  <text class="sm" x="375" y="130" text-anchor="middle">分享、振动、写剪贴板…</text>
+  <path class="ln" d="M482 95 H526" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="530" y="50" width="210" height="90" rx="10"/>
+  <text class="ttl on-g" x="635" y="74" text-anchor="middle">③ 用户授权</text>
+  <text class="sm" x="635" y="96" text-anchor="middle">浏览器弹窗询问</text>
+  <text class="sm" x="635" y="112" text-anchor="middle">定位、读剪贴板、通知…</text>
+  <text class="mono" x="635" y="130" text-anchor="middle">permissions.query()</text>
+  <text class="sm" x="380" y="180" text-anchor="middle">再加上最基础的一道：特性检测 —— if ('getBattery' in navigator) { … }</text>
+</svg>
+<figcaption>图 14-1　调用设备 API 之前要过的门槛</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>API</th><th>支持情况（2026）</th><th>需要授权</th><th>需要用户操作</th></tr>
+  <tr><td>电池状态 <code>navigator.getBattery()</code></td><td><span class="bl limited">仅 Chromium</span></td><td>否</td><td>否</td></tr>
+  <tr><td>网络信息 <code>navigator.connection</code></td><td><span class="bl limited">仅 Chromium</span></td><td>否</td><td>否</td></tr>
+  <tr><td>地理位置 <code>navigator.geolocation</code></td><td><span class="bl wide">广泛可用</span></td><td>是</td><td>否（但建议在点击后请求）</td></tr>
+  <tr><td>剪贴板写入 <code>clipboard.writeText()</code></td><td><span class="bl wide">广泛可用</span></td><td>通常否</td><td>Safari / Firefox 需要</td></tr>
+  <tr><td>剪贴板读取 <code>clipboard.readText()</code></td><td><span class="bl newly">Baseline 2024</span></td><td>是（形式各异）</td><td>是</td></tr>
+  <tr><td>系统分享 <code>navigator.share()</code></td><td><span class="bl limited">移动端普遍支持，桌面端不一</span></td><td>否</td><td>是</td></tr>
+  <tr><td>振动 <code>navigator.vibrate()</code></td><td><span class="bl limited">Android 为主，iOS 不支持</span></td><td>否</td><td>是</td></tr>
+  <tr><td>屏幕方向 <code>screen.orientation</code></td><td><span class="bl newly">Baseline 2023</span></td><td>否</td><td>否</td></tr>
+</table>
+</div>
+
+<h2 id="r14-1"><span class="rn">14.1</span>读取电池状态</h2>
+
+<p class="prob">在应用中显示设备电量和是否正在充电。</p>
+
+<div class="code" data-lang="html" data-file="14-01-battery-markup.html">
+<script type="text/plain">
+<ul>
+  <li>Battery charge level: <span id="battery-level">--</span></li>
+  <li>Battery charge status: <span id="battery-charging">--</span></li>
+</ul>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="14-02-battery-status-api.js">
+<script type="text/plain">
+const batteryLevelItem = document.querySelector('#battery-level');
+const batteryChargingItem = document.querySelector('#battery-charging');
+
+navigator.getBattery().then(battery => {
+  // level 是 0 到 1 之间的小数，乘以 100 变成百分比
+  // （用 Math.round 避免出现 56.99999999999999% 这样的浮点误差）
+  batteryLevelItem.textContent = `${Math.round(battery.level * 100)}%`;
+  batteryChargingItem.textContent = battery.charging ? 'Charging' : 'Not charging';
+});
+</script>
+</div>
+
+<p>拔掉电源后，页面上的状态就过时了。<code>battery</code> 对象是一个 EventTarget，可以监听变化：</p>
+
+<div class="code" data-lang="js" data-file="14-03-battery-events.js">
+<script type="text/plain">
+battery.addEventListener('levelchange', () => {
+  batteryLevelItem.textContent = `${Math.round(battery.level * 100)}%`;
+});
+
+battery.addEventListener('chargingchange', () => {
+  batteryChargingItem.textContent = battery.charging ? 'Charging' : 'Not charging';
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="BatteryManager 的属性与对应事件">
+  <rect class="bx-g" x="20" y="30" width="200" height="110" rx="12"/>
+  <rect x="40" y="62" width="140" height="46" rx="6" style="fill:none;stroke:var(--green);stroke-width:2.5"/>
+  <rect x="180" y="76" width="10" height="18" rx="2" style="fill:var(--green)"/>
+  <rect x="46" y="68" width="84" height="34" rx="3" style="fill:var(--green);opacity:.75"/>
+  <text class="ttl on-g" x="120" y="130" text-anchor="middle">BatteryManager</text>
+  <text class="mono" x="250" y="46">level</text><text class="sm" x="380" y="46">0 ~ 1 的电量</text><text class="mono on-b" x="560" y="46">levelchange</text>
+  <text class="mono" x="250" y="76">charging</text><text class="sm" x="380" y="76">是否在充电（布尔）</text><text class="mono on-b" x="560" y="76">chargingchange</text>
+  <text class="mono" x="250" y="106">chargingTime</text><text class="sm" x="380" y="106">充满还需几秒（不充电为 Infinity）</text><text class="mono on-b" x="560" y="106">chargingtimechange</text>
+  <text class="mono" x="250" y="136">dischargingTime</text><text class="sm" x="380" y="136">用完还需几秒（充电为 Infinity）</text><text class="mono on-b" x="560" y="136">dischargingtimechange</text>
+</svg>
+<figcaption>图 14-2　电池对象的属性与事件</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="14-04-checking-support.js">
+<script type="text/plain">
+if ('getBattery' in navigator) {
+  // 在这里请求电池状态
+} else {
+  // 不支持
+}
+</script>
+</div>
+
+<p>典型用途：电量低时暂停后台同步、降低动画和轮询频率，或者提醒用户保存工作。</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 为什么 Firefox 和 Safari 不支持？</div>
+  <p>
+    研究人员发现，电量百分比加上剩余时间的组合几乎是独一无二的，可以在短时间内用来<strong>跨网站追踪用户</strong>（浏览器指纹）。
+    Firefox 因此移除了这个 API，Safari 从未实现。所以它只能用于「锦上添花」，不能作为核心功能的依据。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：你的电池状态</div>
+  <div class="b"><div class="out" id="bat-out" style="min-height:0">读取中……</div></div>
+</div>
+
+<h2 id="r14-2"><span class="rn">14.2</span>读取网络状态</h2>
+
+<p class="prob">你想知道用户的网络有多快，比如在慢速网络下不自动播放高清视频。</p>
+
+<div class="code" data-lang="js" data-file="14-05-network-capabilities.js">
+<script type="text/plain">
+if (navigator.connection.effectiveType === '4g') {
+  // 可以进行高带宽的操作
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="effectiveType 的四个档位">
+  <rect class="bx-r" x="20" y="40" width="120" height="40" rx="6"/><text class="mono on-r" x="80" y="65" text-anchor="middle">slow-2g</text>
+  <rect class="bx-a" x="140" y="40" width="80" height="40" rx="6"/><text class="mono on-a" x="180" y="65" text-anchor="middle">2g</text>
+  <rect class="bx-b" x="220" y="40" width="220" height="40" rx="6"/><text class="mono on-b" x="330" y="65" text-anchor="middle">3g</text>
+  <rect class="bx-g" x="440" y="40" width="300" height="40" rx="6"/><text class="mono on-g" x="590" y="65" text-anchor="middle">4g</text>
+  <text class="sm" x="140" y="100" text-anchor="middle">50 Kbps</text>
+  <text class="sm" x="220" y="100" text-anchor="middle">70 Kbps</text>
+  <text class="sm" x="440" y="100" text-anchor="middle">700 Kbps</text>
+  <text class="sm" x="740" y="100" text-anchor="end">以上都算 4g</text>
+  <text class="sm" x="380" y="134" text-anchor="middle">这是根据实测的往返时间和下载速度「估算」的档位，不是真实的网络类型：Wi-Fi 很慢时也可能报告 3g</text>
+</svg>
+<figcaption>图 14-3　effectiveType 是「有效速度」档位</figcaption>
+</figure>
+
+<p><code>navigator.connection</code> 上还有：</p>
+
+<dl class="terms">
+  <dt>downlink</dt><dd>估算的下行带宽（Mbps）</dd>
+  <dt>rtt</dt><dd>估算的往返时间（毫秒）</dd>
+  <dt>saveData</dt><dd>用户是否开启了「省流量模式」，为 <code>true</code> 时应该主动减少数据使用</dd>
+  <dt>change 事件</dt><dd>网络情况变化时触发</dd>
+</dl>
+
+<div class="box new">
+  <div class="t">&#10024; 更通用的：在线 / 离线</div>
+  <p>
+    Network Information API 只有 Chromium 支持。所有浏览器都支持的是最基础的在线状态：<span class="bl wide">广泛可用</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+navigator.onLine;   // true / false（false 一定是离线；true 只代表「连着某个网络」，不保证能上网）
+
+window.addEventListener('offline', () => showBanner('网络已断开，修改会在恢复后同步'));
+window.addEventListener('online',  () => { hideBanner(); syncPendingChanges(); });
+</script>
+  </div>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：你的网络状态（打开开发者工具切换「离线」试试）</div>
+  <div class="b"><div class="out" id="net-out" style="min-height:0"></div></div>
+</div>
+
+<h2 id="r14-3"><span class="rn">14.3</span>获取设备位置</h2>
+
+<p class="prob">获取设备当前的经纬度。</p>
+
+<div class="code" data-lang="js" data-file="14-06-request-location.js">
+<script type="text/plain">
+navigator.geolocation.getCurrentPosition(position => {
+  console.log('Latitude: ' + position.coords.latitude);
+  console.log('Longitude: ' + position.coords.longitude);
+}, error => {
+  // 用户拒绝了授权，或者无法确定位置
+  console.log(error);
+});
+</script>
+</div>
+
+<p>
+  这是一个<strong>回调式</strong>的 API：第一个参数是成功回调，第二个是失败回调。第一次调用时浏览器会询问用户是否允许共享位置，
+  用户拒绝时调用失败回调。想事先知道权限状态，可以用 Permissions API：
+</p>
+
+<div class="code" data-lang="js" data-file="检查定位权限">
+<script type="text/plain">
+const permission = await navigator.permissions.query({ name: 'geolocation' });
+// permission.state: 'granted' | 'denied' | 'prompt'
+
+// 权限状态也会变化（用户在设置里修改）
+permission.addEventListener('change', () => console.log('新的状态：', permission.state));
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="浏览器获取位置的几种来源及精度">
+  <text class="ttl" x="20" y="24">浏览器可能用什么来定位？（由浏览器和系统决定，你无法指定）</text>
+  <rect class="bx-g" x="20" y="40" width="170" height="70" rx="10"/><text class="ttl on-g" x="105" y="64" text-anchor="middle">GPS</text><text class="sm" x="105" y="84" text-anchor="middle">几米</text><text class="sm" x="105" y="100" text-anchor="middle">室外、手机，耗电</text>
+  <rect class="bx-b" x="205" y="40" width="170" height="70" rx="10"/><text class="ttl on-b" x="290" y="64" text-anchor="middle">Wi-Fi 定位</text><text class="sm" x="290" y="84" text-anchor="middle">几十米</text><text class="sm" x="290" y="100" text-anchor="middle">周围热点的位置数据库</text>
+  <rect class="bx-a" x="390" y="40" width="170" height="70" rx="10"/><text class="ttl on-a" x="475" y="64" text-anchor="middle">基站</text><text class="sm" x="475" y="84" text-anchor="middle">几百米到几公里</text><text class="sm" x="475" y="100" text-anchor="middle">手机信号塔</text>
+  <rect class="bx-r" x="575" y="40" width="165" height="70" rx="10"/><text class="ttl on-r" x="657" y="64" text-anchor="middle">IP 地址</text><text class="sm" x="657" y="84" text-anchor="middle">城市级，可能很离谱</text><text class="sm" x="657" y="100" text-anchor="middle">用 VPN 时完全不准</text>
+  <path class="ln" d="M20 130 H740" marker-end="url(#ar)"/>
+  <text class="sm on-g" x="20" y="150">更精确</text><text class="sm on-r" x="740" y="150" text-anchor="end">更粗略</text>
+  <text class="sm" x="380" y="186" text-anchor="middle">position.coords.accuracy 告诉你这次结果的误差半径（米）</text>
+</svg>
+<figcaption>图 14-4　定位来源与精度</figcaption>
+</figure>
+
+<p>
+  Geolocation API 已被所有浏览器支持多年，一般不需要特性检测。除了经纬度，<code>position.coords</code> 里还可能有（取决于设备）：
+  <code>accuracy</code>（误差半径，米）、<code>altitude</code>（海拔，米）、<code>heading</code>（方向，度）、<code>speed</code>（速度，米/秒）。
+</p>
+
+<h3>选项与持续跟踪</h3>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const options = {
+  enableHighAccuracy: true,  // 尽量用 GPS（更准，但更慢更耗电）
+  timeout: 10_000,           // 10 秒拿不到就报超时错误
+  maximumAge: 60_000         // 可以接受 1 分钟以内的缓存位置
+};
+
+// 持续跟踪：位置变化时反复回调（原书写成 watchCurrentPosition，正确的名字是 watchPosition）
+const watchId = navigator.geolocation.watchPosition(onPosition, onError, options);
+
+// 不需要时一定要停止，否则会一直耗电
+navigator.geolocation.clearWatch(watchId);
+
+// 错误对象的 code：1 = PERMISSION_DENIED，2 = POSITION_UNAVAILABLE，3 = TIMEOUT
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 包装成 Promise</div>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const getPosition = (options) =>
+  new Promise((resolve, reject) =>
+    navigator.geolocation.getCurrentPosition(resolve, reject, options));
+
+const { coords } = await getPosition({ timeout: 10_000 });
+</script>
+  </div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 定位（Geolocation）≠ 地理编码（Geocoding）</div>
+  <p>
+    Geolocation API 只给出<strong>经纬度</strong>，不知道你在哪个城市、哪条街。把地址转换成经纬度叫<strong>地理编码</strong>，
+    反过来叫<strong>逆地理编码</strong>，这需要借助地图服务商的接口（高德、百度、Google、Mapbox、OpenStreetMap Nominatim 等），浏览器并不内置。
+  </p>
+</div>
+
+<h2 id="r14-4"><span class="rn">14.4</span>在地图上显示位置</h2>
+
+<p class="prob">拿到经纬度后，在页面上显示一张地图。</p>
+
+<p>原书使用 Google Maps Embed API：构造一个带参数的 URL，放进 <code>&lt;iframe&gt;</code>（需要申请 API Key）：</p>
+
+<div class="code" data-lang="js" data-file="14-07-map-iframe.js">
+<script type="text/plain">
+// 假设页面上有一个 id="map" 的占位元素
+const map = document.querySelector('#map');
+
+navigator.geolocation.getCurrentPosition(position => {
+  const { latitude, longitude } = position.coords;
+
+  const iframe = document.createElement('iframe');
+  iframe.width = 450;
+  iframe.height = 250;
+
+  // 地图类型（place）是 URL 路径的一部分
+  const url = new URL('https://www.google.com/maps/embed/v1/place');
+  // key：你的 API Key
+  url.searchParams.append('key', 'YOUR_GOOGLE_MAPS_API_KEY');
+  // q：用逗号分隔的经纬度
+  url.searchParams.append('q', `${latitude},${longitude}`);
+
+  iframe.src = url;
+  map.appendChild(iframe);
+});
+</script>
+</div>
+
+<p>注意这里第 3 章学过的 <code>URL</code> + <code>searchParams</code> 派上了用场。前端代码里的 API Key 任何人都看得到，务必在服务商后台限制它只能被你的域名使用。</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 不需要 API Key 的替代方案：OpenStreetMap</div>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const d = 0.01;   // 视野范围（经纬度）
+const url = new URL('https://www.openstreetmap.org/export/embed.html');
+url.searchParams.set('bbox', [longitude - d, latitude - d, longitude + d, latitude + d].join(','));
+url.searchParams.set('marker', `${latitude},${longitude}`);
+iframe.src = url;
+</script>
+  </div>
+  <p>国内项目通常使用高德或百度地图的 JS API；需要自定义交互（多个标记点、路线）时，可以使用 Leaflet、MapLibre 等开源库。</p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：获取位置并显示 OpenStreetMap 地图（需授权，位置不会上传到本站）</div>
+  <div class="b">
+    <div class="row"><button id="geo-btn">获取我的位置</button></div>
+    <div class="out" id="geo-out" style="min-height:0"></div>
+    <div id="geo-map"></div>
+  </div>
+</div>
+
+<h2 id="r14-5"><span class="rn">14.5</span>复制与粘贴文本</h2>
+
+<p class="prob">给文本框加上「复制」和「粘贴」按钮：复制选中的文字；粘贴时替换选中的文字。</p>
+
+<div class="code" data-lang="js" data-file="14-08-copy-selection.js">
+<script type="text/plain">
+async function copySelection(textarea) {
+  const { selectionStart, selectionEnd } = textarea;
+  const selectedText = textarea.value.slice(selectionStart, selectionEnd);
+
+  try {
+    await navigator.clipboard.writeText(selectedText);
+  } catch (error) {
+    console.error('Clipboard error:', error);
+  }
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="14-09-paste-selection.js">
+<script type="text/plain">
+async function pasteToSelection(textarea) {
+  const currentValue = textarea.value;
+  const { selectionStart, selectionEnd } = textarea;
+
+  try {
+    // 剪贴板 API 是异步的：读取系统剪贴板需要等待
+    const clipboardValue = await navigator.clipboard.readText();
+
+    // 用剪贴板内容替换选中的部分
+    const newValue = currentValue.slice(0, selectionStart)
+      + clipboardValue
+      + currentValue.slice(selectionEnd);
+    textarea.value = newValue;
+  } catch (error) {
+    console.error('Clipboard error:', error);
+  }
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="用 selectionStart 和 selectionEnd 替换选中文字">
+  <text class="mono" x="20" y="30">textarea.value：</text>
+  <g class="mono" style="font-size:16px">
+    <rect class="bx" x="150" y="12" width="150" height="28" rx="4"/><text x="225" y="32" text-anchor="middle">Hello, </text>
+    <rect class="bx-a" x="300" y="12" width="110" height="28" rx="4"/><text class="on-a" x="355" y="32" text-anchor="middle">world</text>
+    <rect class="bx" x="410" y="12" width="60" height="28" rx="4"/><text x="440" y="32" text-anchor="middle">!</text>
+  </g>
+  <path class="ln-a" d="M300 44 V60"/><text class="mono on-a" x="300" y="74" text-anchor="middle">selectionStart = 7</text>
+  <path class="ln-a" d="M410 44 V84"/><text class="mono on-a" x="410" y="98" text-anchor="middle">selectionEnd = 12</text>
+
+  <text class="mono" x="20" y="140">粘贴 "Web API"：</text>
+  <g class="mono" style="font-size:16px">
+    <rect class="bx" x="150" y="122" width="150" height="28" rx="4"/><text x="225" y="142" text-anchor="middle">slice(0, 7)</text>
+    <rect class="bx-g" x="300" y="122" width="130" height="28" rx="4"/><text class="on-g" x="365" y="142" text-anchor="middle">"Web API"</text>
+    <rect class="bx" x="430" y="122" width="130" height="28" rx="4"/><text x="495" y="142" text-anchor="middle">slice(12)</text>
+  </g>
+  <text class="sm" x="580" y="140">= "Hello, Web API!"</text>
+  <text class="sm" x="20" y="172">没有选中文字时 start === end，也就是光标位置 —— 同样的公式就变成了「在光标处插入」</text>
+</svg>
+<figcaption>图 14-5　用选区的起止位置拼出新字符串</figcaption>
+</figure>
+
+<ul>
+  <li>虽然没用到 <code>writeText</code> 的返回值，仍然要 <code>await</code> 它：这样失败时（比如没有权限）才能进入 <code>catch</code>。</li>
+  <li>文本框没有选中文字但有焦点时，内容插入到光标位置；文本框从未获得焦点时，选区位置为末尾，内容追加到最后。</li>
+  <li>也可以使用 <code>textarea.setRangeText(clipboardValue)</code>，它会替换当前选区并保留撤销历史的行为更自然。</li>
+</ul>
+
+<h3>读取剪贴板的权限</h3>
+
+<p>读取剪贴板可能泄露隐私（密码、验证码……），因此需要授权。原书用 Permissions API 查询：</p>
+
+<div class="code" data-lang="js" data-file="14-10-clipboard-permission.js">
+<script type="text/plain">
+const permission = await navigator.permissions.query({ name: 'clipboard-read' });
+
+if (permission.state !== 'denied') {
+  // 继续读取剪贴板
+}
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 各浏览器的剪贴板权限模型不同</div>
+  <ul>
+    <li><strong>Chrome / Edge</strong>：首次 <code>readText()</code> 时弹出权限请求；支持查询 <code>'clipboard-read'</code>。</li>
+    <li><strong>Safari / Firefox</strong>：不支持查询 <code>'clipboard-read'</code>（<code>permissions.query</code> 会抛 <code>TypeError</code>）。它们在每次读取时，在光标旁弹出一个「粘贴」小按钮，用户点了才返回内容。</li>
+  </ul>
+  <p>所以查询权限也要放进 <code>try/catch</code>，把「查询失败」当作「未知，直接尝试」处理。无论哪种浏览器，读取都必须由用户操作（如点击按钮）触发。</p>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 复制图片等富内容</div>
+  <p>
+    <code>navigator.clipboard.write()</code> 配合 <code>ClipboardItem</code> 可以写入图片、HTML 等多种格式，<code>read()</code> 反之。<span class="bl newly">Baseline 2024</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const blob = await (await fetch('/chart.png')).blob();
+await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+</script>
+  </div>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：选中一部分文字，点击复制或粘贴</div>
+  <div class="b">
+    <textarea id="cb-ta" rows="3" style="width:100%">Hello, world! 选中这里的任意文字试试。</textarea>
+    <div class="row"><button id="cb-copy">复制选中文字</button><button id="cb-paste">粘贴到选区</button><span class="hint" id="cb-msg"></span></div>
+  </div>
+</div>
+
+<h2 id="r14-6"><span class="rn">14.6</span>用 Web Share API 分享内容</h2>
+
+<p class="prob">用设备原生的分享面板分享一个链接（微信、邮件、短信、AirDrop……由系统决定）。</p>
+
+<div class="code" data-lang="js" data-file="14-11-sharing-link.js">
+<script type="text/plain">
+if ('share' in navigator) {
+  navigator.share({
+    title: 'Web API Cookbook',
+    text: 'Check out this awesome site!',
+    url: 'https://browserapis.dev'
+  });
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="Web Share API 调起系统分享面板">
+  <rect class="bx-b" x="20" y="50" width="170" height="60" rx="10"/>
+  <text class="mono on-b" x="105" y="76" text-anchor="middle">navigator.share(</text>
+  <text class="mono on-b" x="105" y="94" text-anchor="middle">{ title, text, url })</text>
+  <path class="ln" d="M192 80 H246" marker-end="url(#ar)"/>
+  <text class="sm" x="219" y="72" text-anchor="middle">点击中</text>
+  <rect class="bx-a" x="250" y="20" width="240" height="130" rx="14"/>
+  <text class="ttl on-a" x="370" y="44" text-anchor="middle">系统分享面板</text>
+  <rect class="bx" x="270" y="60" width="60" height="30" rx="6"/><text class="sm" x="300" y="80" text-anchor="middle">邮件</text>
+  <rect class="bx" x="340" y="60" width="60" height="30" rx="6"/><text class="sm" x="370" y="80" text-anchor="middle">信息</text>
+  <rect class="bx" x="410" y="60" width="60" height="30" rx="6"/><text class="sm" x="440" y="80" text-anchor="middle">AirDrop</text>
+  <rect class="bx" x="270" y="100" width="60" height="30" rx="6"/><text class="sm" x="300" y="120" text-anchor="middle">微信</text>
+  <rect class="bx" x="340" y="100" width="60" height="30" rx="6"/><text class="sm" x="370" y="120" text-anchor="middle">备忘录</text>
+  <rect class="bx" x="410" y="100" width="60" height="30" rx="6"/><text class="sm" x="440" y="120" text-anchor="middle">…</text>
+  <path class="ln-g" d="M492 60 H540" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="548" y="64">分享完成 → Promise 兑现</text>
+  <path class="ln-r" d="M492 110 H540" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="548" y="114">用户取消 → AbortError</text>
+</svg>
+<figcaption>图 14-6　一行代码调起系统分享面板，样式因系统而异</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+shareButton.addEventListener('click', async () => {       // 必须在用户操作中调用
+  const data = { title: document.title, url: location.href };
+  if (!navigator.share) return copyLinkFallback();         // 不支持：退回到「复制链接」
+  try {
+    await navigator.share(data);
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error(e);         // 用户取消不算错误
+  }
+});
+
+// 分享文件前先用 canShare 检查
+if (navigator.canShare?.({ files: [imageFile] })) {
+  await navigator.share({ files: [imageFile], title: '我的照片' });
+}
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：分享本页</div>
+  <div class="b"><div class="row"><button id="share-btn">分享</button><span class="hint" id="share-msg"></span></div></div>
+</div>
+
+<h2 id="r14-7"><span class="rn">14.7</span>让设备振动</h2>
+
+<p class="prob">给应用加一点触觉反馈，比如操作成功时让手机轻微振动。</p>
+
+<div class="code" data-lang="js" data-file="14-12 / 14-13">
+<script type="text/plain">
+// 振动一次，持续 500ms
+navigator.vibrate(500);
+
+// 振动三次，每次 500ms，中间停顿 250ms
+navigator.vibrate([500, 250, 500, 250, 500]);
+
+// 取消正在进行的振动
+navigator.vibrate(0);
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 130" role="img" aria-label="振动模式数组的含义">
+  <path class="ln" d="M20 80 H740" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="20" y="50" width="200" height="30" rx="4"/><text class="sm on-a" x="120" y="70" text-anchor="middle">振动 500</text>
+  <rect class="bx-d" x="220" y="50" width="100" height="30" rx="4"/><text class="sm" x="270" y="70" text-anchor="middle">停 250</text>
+  <rect class="bx-a" x="320" y="50" width="200" height="30" rx="4"/><text class="sm on-a" x="420" y="70" text-anchor="middle">振动 500</text>
+  <rect class="bx-d" x="520" y="50" width="100" height="30" rx="4"/><text class="sm" x="570" y="70" text-anchor="middle">停 250</text>
+  <rect class="bx-a" x="620" y="50" width="120" height="30" rx="4"/><text class="sm on-a" x="680" y="70" text-anchor="middle">振动 500 …</text>
+  <text class="mono" x="20" y="30">[500, 250, 500, 250, 500] —— 奇数位是振动时长，偶数位是停顿时长（毫秒）</text>
+  <text class="sm" x="20" y="110">不支持振动的设备（如笔记本电脑）调用它不会报错，只是没有效果</text>
+</svg>
+<figcaption>图 14-7　振动模式</figcaption>
+</figure>
+
+<p>和自动播放视频一样，页面刚加载时不能振动，用户必须先与页面交互过。</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 支持有限</div>
+  <p>
+    iOS 上的所有浏览器都不支持 Vibration API（它们都基于 Safari 的 WebKit），部分桌面浏览器也已移除。
+    振动只能作为可有可无的增强，并且要克制使用 —— 频繁的振动既烦人又耗电。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：在 Android 手机上打开本页</div>
+  <div class="b"><div class="row"><button id="vib-1">vibrate(200)</button><button id="vib-3">三连振</button><span class="hint" id="vib-msg"></span></div></div>
+</div>
+
+<h2 id="r14-8"><span class="rn">14.8</span>获取屏幕方向</h2>
+
+<p class="prob">判断设备当前是竖屏还是横屏。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+screen.orientation.type;    // 'portrait-primary' | 'portrait-secondary' | 'landscape-primary' | 'landscape-secondary'
+screen.orientation.angle;   // 0 | 90 | 180 | 270，相对设备「自然方向」的旋转角度
+
+screen.orientation.addEventListener('change', () => {
+  console.log('方向变为', screen.orientation.type, screen.orientation.angle);
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="手机四个方向对应的 orientation.type 与角度">
+  <g>
+    <rect class="bx-b" x="60" y="30" width="60" height="110" rx="10"/><circle cx="90" cy="130" r="4" style="fill:var(--blue)"/>
+    <text class="mono on-b" x="90" y="164" text-anchor="middle">portrait-primary</text><text class="sm" x="90" y="182" text-anchor="middle">0°（自然方向）</text>
+  </g>
+  <g>
+    <rect class="bx-g" x="215" y="55" width="110" height="60" rx="10"/><circle cx="315" cy="85" r="4" style="fill:var(--green)"/>
+    <text class="mono on-g" x="270" y="164" text-anchor="middle">landscape-primary</text><text class="sm" x="270" y="182" text-anchor="middle">90°</text>
+  </g>
+  <g>
+    <rect class="bx-p" x="420" y="30" width="60" height="110" rx="10"/><circle cx="450" cy="40" r="4" style="fill:var(--purple)"/>
+    <text class="mono on-p" x="450" y="164" text-anchor="middle">portrait-secondary</text><text class="sm" x="450" y="182" text-anchor="middle">180°（倒过来）</text>
+  </g>
+  <g>
+    <rect class="bx-a" x="575" y="55" width="110" height="60" rx="10"/><circle cx="585" cy="85" r="4" style="fill:var(--accent)"/>
+    <text class="mono on-a" x="630" y="164" text-anchor="middle">landscape-secondary</text><text class="sm" x="630" y="182" text-anchor="middle">270°</text>
+  </g>
+  <text class="sm" x="380" y="16" text-anchor="middle">以自然方向为竖屏的手机为例（圆点表示原本的「底部」）</text>
+</svg>
+<figcaption>图 14-8　四种屏幕方向（自然方向为横屏的设备，类型会反过来）</figcaption>
+</figure>
+
+<div class="box tip">
+  <div class="t">&#128161; 只是为了改布局？用 CSS</div>
+  <p>
+    如果只是想在横屏时换个布局，用媒体查询 <code>@media (orientation: landscape) { … }</code> 即可。
+    需要设备的<strong>倾斜角度</strong>（做水平仪、体感游戏）时，用 <code>deviceorientation</code> 事件；iOS 上还需要先在点击中调用
+    <code>DeviceOrientationEvent.requestPermission()</code>。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：旋转设备或调整窗口</div>
+  <div class="b"><div class="out" id="ori-out" style="min-height:0"></div></div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>设备 API 之前先过门槛：特性检测、HTTPS、用户操作、用户授权；用 <code>navigator.permissions.query()</code> 查询权限（但并非所有权限名都被所有浏览器支持）。</li>
+  <li>电池、网络信息只有 Chromium 支持，只能用作增强；<code>navigator.onLine</code> 与 <code>online/offline</code> 事件通用。</li>
+  <li>定位：<code>getCurrentPosition</code> / <code>watchPosition</code> + <code>clearWatch</code>；经纬度转地址需要第三方地理编码服务。</li>
+  <li>剪贴板：<code>writeText</code> / <code>readText</code> 都返回 Promise，读取需要授权且各浏览器交互不同。</li>
+  <li><code>navigator.share()</code> 调起系统分享，<code>navigator.vibrate()</code> 振动，<code>screen.orientation</code> 读取方向 —— 都要准备好降级方案。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个「省电模式」：电量低于 20% 且未充电时，给页面加上 <code>.low-power</code> 类，关闭所有动画（不支持电池 API 的浏览器保持原样）。</li>
+    <li>做一个跑步记录器：用 <code>watchPosition</code> 记录一串坐标，计算累计距离（提示：Haversine 公式），停止时 <code>clearWatch</code>。</li>
+    <li>给文章的每个代码块加「复制」按钮（本教程页面就是这样做的，可以参考 <code>assets/site.js</code>）。</li>
+    <li>写一个 <code>share(data)</code> 工具函数：支持 Web Share 时调起分享面板，否则把链接复制到剪贴板并提示「链接已复制」。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // 14.1
+  var bo = document.getElementById('bat-out');
+  if (!('getBattery' in navigator)) bo.textContent = "'getBattery' in navigator === false —— 你的浏览器不支持 Battery Status API";
+  else navigator.getBattery().then(function (b) {
+    function show() {
+      bo.textContent = 'level = ' + b.level + '（' + Math.round(b.level * 100) + '%）\ncharging = ' + b.charging +
+        '\nchargingTime = ' + b.chargingTime + '\ndischargingTime = ' + b.dischargingTime;
+    }
+    ['levelchange', 'chargingchange', 'chargingtimechange', 'dischargingtimechange'].forEach(function (e) { b.addEventListener(e, show); });
+    show();
+  });
+
+  // 14.2
+  var no = document.getElementById('net-out');
+  function net() {
+    var c = navigator.connection, s = 'navigator.onLine = ' + navigator.onLine + '\n';
+    s += c ? 'effectiveType = ' + c.effectiveType + '\ndownlink = ' + c.downlink + ' Mbps\nrtt = ' + c.rtt + ' ms\nsaveData = ' + c.saveData
+           : 'navigator.connection 不存在 —— 你的浏览器不支持 Network Information API';
+    no.textContent = s;
+  }
+  window.addEventListener('online', net); window.addEventListener('offline', net);
+  if (navigator.connection) navigator.connection.addEventListener('change', net);
+  net();
+
+  // 14.3 / 14.4
+  var go = document.getElementById('geo-out'), gm = document.getElementById('geo-map');
+  document.getElementById('geo-btn').onclick = function () {
+    if (!navigator.geolocation) { go.textContent = '不支持 Geolocation'; return; }
+    go.textContent = '请求位置中……';
+    navigator.geolocation.getCurrentPosition(function (p) {
+      var c = p.coords;
+      go.textContent = 'latitude = ' + c.latitude.toFixed(5) + '\nlongitude = ' + c.longitude.toFixed(5) + '\naccuracy = ±' + Math.round(c.accuracy) + ' 米';
+      var d = 0.01, u = new URL('https://www.openstreetmap.org/export/embed.html');
+      u.searchParams.set('bbox', [c.longitude - d, c.latitude - d, c.longitude + d, c.latitude + d].join(','));
+      u.searchParams.set('marker', c.latitude + ',' + c.longitude);
+      gm.innerHTML = '';
+      var f = document.createElement('iframe');
+      f.width = '100%'; f.height = 260; f.style.border = '0'; f.style.borderRadius = '8px'; f.style.marginTop = '10px';
+      f.title = '你的位置'; f.src = u; gm.appendChild(f);
+    }, function (e) {
+      go.textContent = 'error.code = ' + e.code + '（' + ({ 1: 'PERMISSION_DENIED 用户拒绝', 2: 'POSITION_UNAVAILABLE 无法定位', 3: 'TIMEOUT 超时' }[e.code] || '') + '）\n' + e.message;
+    }, { timeout: 15000 });
+  };
+
+  // 14.5
+  var ta = document.getElementById('cb-ta'), cm = document.getElementById('cb-msg');
+  document.getElementById('cb-copy').onclick = async function () {
+    var t = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+    if (!t) { cm.textContent = '请先选中一些文字'; return; }
+    try { await navigator.clipboard.writeText(t); cm.textContent = '已复制：' + t; } catch (e) { cm.textContent = e.name + ': ' + e.message; }
+  };
+  document.getElementById('cb-paste').onclick = async function () {
+    try {
+      var v = await navigator.clipboard.readText();
+      ta.setRangeText(v, ta.selectionStart, ta.selectionEnd, 'end');
+      cm.textContent = '已粘贴 ' + v.length + ' 个字符';
+    } catch (e) { cm.textContent = e.name + ': ' + e.message; }
+  };
+
+  // 14.6
+  var sm = document.getElementById('share-msg');
+  if (!navigator.share) sm.textContent = '不支持 Web Share，点击将改为复制链接';
+  document.getElementById('share-btn').onclick = async function () {
+    var data = { title: document.title, text: '推荐一个 Web API 教程', url: location.href };
+    if (!navigator.share) {
+      try { await navigator.clipboard.writeText(location.href); sm.textContent = '链接已复制到剪贴板'; } catch (e) { sm.textContent = e.message; }
+      return;
+    }
+    try { await navigator.share(data); sm.textContent = '分享成功'; } catch (e) { sm.textContent = e.name === 'AbortError' ? '用户取消了分享' : e.name + ': ' + e.message; }
+  };
+
+  // 14.7
+  var vm = document.getElementById('vib-msg');
+  function vib(p) { if (!navigator.vibrate) { vm.textContent = '不支持 navigator.vibrate'; return; } vm.textContent = 'vibrate() 返回 ' + navigator.vibrate(p); }
+  document.getElementById('vib-1').onclick = function () { vib(200); };
+  document.getElementById('vib-3').onclick = function () { vib([300, 150, 300, 150, 300]); };
+
+  // 14.8
+  var oo = document.getElementById('ori-out');
+  function ori() {
+    oo.textContent = screen.orientation ? 'screen.orientation.type = ' + screen.orientation.type + '\nscreen.orientation.angle = ' + screen.orientation.angle +
+      '\nmatchMedia("(orientation: portrait)").matches = ' + matchMedia('(orientation: portrait)').matches : '不支持 screen.orientation';
+  }
+  if (screen.orientation) screen.orientation.addEventListener('change', ori);
+  window.addEventListener('resize', ori); ori();
+})();
+</script>
+</body>
+</html>

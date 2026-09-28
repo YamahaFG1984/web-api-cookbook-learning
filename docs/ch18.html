@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 18 章 · 媒体 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .media-box { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  @media (max-width: 600px) { .media-box { grid-template-columns: 1fr; } }
+  .media-box video, .media-box img, .media-box canvas { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #111; border-radius: 8px; display: block; }
+  .media-box .cap { font-size: 12px; color: var(--fg-faint); margin-top: 3px; text-align: center; }
+</style>
+</head>
+<body data-chapter="18">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 18 章</span>
+<h1>媒体：屏幕、摄像头与录制</h1>
+<p class="lede">
+  过去，网页想用摄像头得装 Flash 之类的插件。今天，浏览器内置的 Media Capture and Streams API（WebRTC 的一部分）
+  只需几行代码就能打开摄像头、麦克风，甚至录制整个屏幕；配合 <code>&lt;video&gt;</code>、<code>&lt;canvas&gt;</code> 和 <code>MediaRecorder</code>，
+  拍照、录像、加滤镜都可以在浏览器里完成。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解 <code>MediaStream</code>：它从哪里来（摄像头、屏幕），可以流向哪里（预览、录制、画布）</li>
+    <li>用 <code>getDisplayMedia</code> 录屏，用 <code>getUserMedia</code> 打开摄像头</li>
+    <li>用 <code>&lt;canvas&gt;</code> 从视频中截取照片，用 <code>MediaRecorder</code> 录制视频</li>
+    <li>用 Media Capabilities API 检测编解码能力，给视频加滤镜</li>
+    <li>修正原书示例中的几个隐蔽 bug，并养成「用完关闭摄像头」的习惯</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">媒体流：从来源到去处</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="MediaStream 的来源与去处">
+  <text class="ttl" x="95" y="22" text-anchor="middle">来源</text>
+  <text class="ttl" x="380" y="22" text-anchor="middle">MediaStream</text>
+  <text class="ttl" x="640" y="22" text-anchor="middle">去处</text>
+
+  <rect class="bx-b" x="20" y="40" width="150" height="56" rx="10"/>
+  <text class="lbl on-b" x="95" y="62" text-anchor="middle">📷 摄像头 / 🎤 麦克风</text>
+  <text class="mono" x="95" y="82" text-anchor="middle" style="font-size:11px">getUserMedia()</text>
+  <rect class="bx-p" x="20" y="110" width="150" height="56" rx="10"/>
+  <text class="lbl on-p" x="95" y="132" text-anchor="middle">🖥 屏幕 / 窗口 / 标签页</text>
+  <text class="mono" x="95" y="152" text-anchor="middle" style="font-size:11px">getDisplayMedia()</text>
+  <rect class="bx-d" x="20" y="180" width="150" height="56" rx="10"/>
+  <text class="lbl" x="95" y="202" text-anchor="middle">🎨 画布 / 视频元素</text>
+  <text class="mono" x="95" y="222" text-anchor="middle" style="font-size:11px">canvas.captureStream()</text>
+
+  <path class="ln" d="M172 68 L286 120" marker-end="url(#ar)"/>
+  <path class="ln" d="M172 138 H286" marker-end="url(#ar)"/>
+  <path class="ln" d="M172 208 L286 156" marker-end="url(#ar)"/>
+
+  <rect class="bx-a" x="290" y="90" width="180" height="96" rx="12"/>
+  <text class="ttl on-a" x="380" y="112" text-anchor="middle">MediaStream</text>
+  <rect class="bx" x="306" y="122" width="148" height="24" rx="5"/><text class="sm" x="380" y="139" text-anchor="middle">视频轨道 VideoTrack</text>
+  <rect class="bx" x="306" y="152" width="148" height="24" rx="5"/><text class="sm" x="380" y="169" text-anchor="middle">音频轨道 AudioTrack</text>
+
+  <path class="ln-g" d="M472 110 L536 64" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M472 130 L536 124" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M472 150 L536 184" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M472 170 L536 244" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="540" y="40" width="200" height="46" rx="10"/>
+  <text class="lbl on-g" x="640" y="60" text-anchor="middle">&lt;video&gt;.srcObject</text>
+  <text class="sm" x="640" y="77" text-anchor="middle">实时预览</text>
+  <rect class="bx-g" x="540" y="100" width="200" height="46" rx="10"/>
+  <text class="lbl on-g" x="640" y="120" text-anchor="middle">MediaRecorder</text>
+  <text class="sm" x="640" y="137" text-anchor="middle">录制成 Blob → 回放 / 上传 / 下载</text>
+  <rect class="bx-g" x="540" y="160" width="200" height="46" rx="10"/>
+  <text class="lbl on-g" x="640" y="180" text-anchor="middle">&lt;canvas&gt; drawImage</text>
+  <text class="sm" x="640" y="197" text-anchor="middle">截图、滤镜、图像处理</text>
+  <rect class="bx-g" x="540" y="220" width="200" height="46" rx="10"/>
+  <text class="lbl on-g" x="640" y="240" text-anchor="middle">RTCPeerConnection</text>
+  <text class="sm" x="640" y="257" text-anchor="middle">视频通话（WebRTC）</text>
+  <text class="sm" x="380" y="290" text-anchor="middle">摄像头、麦克风、屏幕这三类来源都需要安全上下文（HTTPS）并经过用户授权</text>
+</svg>
+<figcaption>图 18-1　MediaStream 是来源与去处之间的「管道」，里面装着若干条轨道</figcaption>
+</figure>
+
+<h2 id="r18-1"><span class="rn">18.1</span>录制屏幕</h2>
+
+<p class="prob">你想录下用户屏幕的画面。</p>
+
+<div class="code" data-lang="js" data-file="18-01-capture-screen.js">
+<script type="text/plain">
+async function captureScreen() {
+  // 弹出系统的「选择要共享的屏幕 / 窗口 / 标签页」对话框
+  const stream = await navigator.mediaDevices.getDisplayMedia();
+
+  const mediaRecorder = new MediaRecorder(stream, {
+    mimeType: 'video/webm'
+  });
+
+  // 录制结束时触发，event.data 就是录好的视频数据
+  mediaRecorder.addEventListener('dataavailable', event => {
+    const blob = new Blob([event.data], { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    video.src = url;   // 在 <video> 中回放
+  });
+
+  mediaRecorder.start();
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="MediaRecorder 的录制流程">
+  <rect class="bx-p" x="20" y="70" width="150" height="56" rx="10"/>
+  <text class="mono on-p" x="95" y="94" text-anchor="middle">getDisplayMedia()</text>
+  <text class="sm" x="95" y="112" text-anchor="middle">用户选择并授权</text>
+  <path class="ln" d="M172 98 H206" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="210" y="70" width="150" height="56" rx="10"/>
+  <text class="mono on-a" x="285" y="94" text-anchor="middle">recorder.start()</text>
+  <text class="sm" x="285" y="112" text-anchor="middle">数据在内存中累积</text>
+  <path class="ln" d="M362 98 H396" marker-end="url(#ar)"/>
+  <rect class="bx-r" x="400" y="54" width="170" height="88" rx="10"/>
+  <text class="lbl on-r" x="485" y="76" text-anchor="middle">停止录制</text>
+  <text class="mono" x="485" y="96" text-anchor="middle" style="font-size:11px">recorder.stop()</text>
+  <text class="sm" x="485" y="114" text-anchor="middle">或用户点击浏览器的</text>
+  <text class="sm" x="485" y="130" text-anchor="middle">「停止共享」按钮</text>
+  <path class="ln" d="M572 98 H606" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="610" y="70" width="130" height="56" rx="10"/>
+  <text class="mono on-g" x="675" y="94" text-anchor="middle">dataavailable</text>
+  <text class="sm" x="675" y="112" text-anchor="middle">event.data: Blob</text>
+  <text class="sm" x="380" y="176" text-anchor="middle">画面不会实时显示在 &lt;video&gt; 里：录制期间数据先存在内存，停止后才得到完整的视频可以播放</text>
+  <text class="sm" x="380" y="196" text-anchor="middle">如果 start(1000) 传入时间片，则每秒触发一次 dataavailable，得到一段段数据块</text>
+</svg>
+<figcaption>图 18-2　MediaRecorder：开始 → 停止 → dataavailable</figcaption>
+</figure>
+
+<p>
+  <code>getDisplayMedia()</code> 返回一个 Promise，兑现为屏幕的 <code>MediaStream</code>。用户拒绝授权时 Promise 被拒绝。
+  WebM 是一种开放的音视频容器格式，Chrome 和 Firefox 都支持录制。拿到 Blob 之后，除了回放，还可以上传或下载：
+</p>
+
+<div class="code" data-lang="js" data-file="18-02-upload-recording.js（已修正变量名）">
+<script type="text/plain">
+const formData = new FormData();   // 原书写成 const form，下面却用 formData
+// blob 是 captureScreen 中创建的 Blob
+formData.append('file', blob, 'screen-recording.webm');
+
+fetch('/api/video/upload', {
+  method: 'POST',
+  body: formData
+});
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="18-03-trigger-download.js">
+<script type="text/plain">
+const link = document.createElement('a');
+// url 是 captureScreen 中创建的 Object URL
+link.href = url;
+link.download = 'screen-recording.webm';
+link.click();   // 第 10 章的下载技巧
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 格式不是到处都支持：先问 isTypeSupported</div>
+  <p>
+    Safari 的 MediaRecorder 不支持 WebM（它录制 MP4），直接写死 <code>'video/webm'</code> 会在 Safari 中抛异常。较新的 Chrome 也支持录制 MP4。
+    稳妥的做法是挑一个当前浏览器支持的格式：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const mimeType = ['video/webm;codecs=vp9', 'video/webm', 'video/mp4']
+  .find(type => MediaRecorder.isTypeSupported(type));
+
+const recorder = new MediaRecorder(stream, { mimeType });
+// 保存文件时，扩展名也要跟着 mimeType 走（.webm 或 .mp4）
+</script>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 两个实用细节</div>
+  <ul>
+    <li><code>getDisplayMedia()</code> 必须在用户点击等操作中调用；在移动端浏览器上大多不可用。</li>
+    <li>录制结束后调用 <code>stream.getTracks().forEach(t =&gt; t.stop())</code> 结束共享，否则浏览器会一直显示「正在共享屏幕」。</li>
+  </ul>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：录屏（桌面浏览器）</div>
+  <div class="b">
+    <div class="row"><button id="sc-start">开始录屏</button><button id="sc-stop" disabled>停止</button><span class="hint" id="sc-msg"></span></div>
+    <video id="sc-video" controls style="width:100%;max-height:300px;margin-top:10px;background:#111;border-radius:8px;display:none"></video>
+  </div>
+</div>
+
+<h2 id="r18-2"><span class="rn">18.2</span>用摄像头拍照</h2>
+
+<p class="prob">打开用户的摄像头，拍一张照片。</p>
+
+<div class="code" data-lang="html" data-file="18-04-markup.html">
+<script type="text/plain">
+<style>
+  #canvas { display: none; }            /* 画布只是中间步骤，不需要显示 */
+  #photo  { width: 640px; height: 480px; }
+</style>
+<canvas id="canvas"></canvas>
+<img id="photo">
+<video id="preview"></video>
+</script>
+</div>
+
+<p>思路分三步：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="拍照的三个步骤：视频预览、画到画布、导出图片">
+  <rect class="bx-b" x="20" y="40" width="200" height="90" rx="10"/>
+  <text class="ttl on-b" x="120" y="64" text-anchor="middle">① &lt;video&gt;</text>
+  <text class="mono" x="120" y="88" text-anchor="middle" style="font-size:11px">video.srcObject = stream</text>
+  <text class="sm" x="120" y="110" text-anchor="middle">实时预览摄像头画面</text>
+  <path class="ln" d="M222 85 H276" marker-end="url(#ar)"/>
+  <text class="sm" x="249" y="76" text-anchor="middle">点击拍照</text>
+  <rect class="bx-a" x="280" y="40" width="200" height="90" rx="10"/>
+  <text class="ttl on-a" x="380" y="64" text-anchor="middle">② &lt;canvas&gt;（隐藏）</text>
+  <text class="mono" x="380" y="88" text-anchor="middle" style="font-size:11px">ctx.drawImage(video, …)</text>
+  <text class="sm" x="380" y="110" text-anchor="middle">把「当前这一帧」画上去</text>
+  <path class="ln" d="M482 85 H536" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="540" y="40" width="200" height="90" rx="10"/>
+  <text class="ttl on-g" x="640" y="64" text-anchor="middle">③ &lt;img&gt;</text>
+  <text class="mono" x="640" y="88" text-anchor="middle" style="font-size:11px">canvas.toDataURL('image/jpeg')</text>
+  <text class="sm" x="640" y="110" text-anchor="middle">或 toBlob() 用于上传</text>
+  <text class="sm" x="380" y="164" text-anchor="middle">&lt;video&gt; 负责「看」，&lt;canvas&gt; 负责「定格」，&lt;img&gt; / Blob 负责「保存」</text>
+</svg>
+<figcaption>图 18-3　从视频流中截取一帧</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="18-05-video-stream.js">
+<script type="text/plain">
+const preview = document.querySelector('#preview');
+
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: true,
+    audio: false
+  });
+
+  preview.srcObject = stream;   // 注意是 srcObject，不是 src
+  preview.play();
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="18-06-capture-image.js（已修正）">
+<script type="text/plain">
+const preview = document.querySelector('#preview');
+const photo = document.querySelector('#photo');
+const canvas = document.querySelector('#canvas');
+
+function captureImage() {
+  // 原书写的是 canvas.width = canvas.width * devicePixelRatio：
+  // 每拍一张，画布就再放大一次（300 → 600 → 1200 …），而且没有考虑视频本身的宽高比。
+  // 直接使用视频画面的真实分辨率即可
+  canvas.width = preview.videoWidth;
+  canvas.height = preview.videoHeight;
+
+  // 取得 2D 上下文，把当前视频帧画上去
+  const context = canvas.getContext('2d');
+  context.drawImage(preview, 0, 0, canvas.width, canvas.height);
+
+  // 导出为 JPEG 的 Data URL，设为图片地址
+  const dataUrl = canvas.toDataURL('image/jpeg');
+  photo.src = dataUrl;
+}
+</script>
+</div>
+
+<p>
+  第一次打开摄像头时浏览器会请求授权；用户拒绝则 <code>getUserMedia</code> 的 Promise 被拒绝（<code>NotAllowedError</code>）。没有摄像头时是 <code>NotFoundError</code>。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 约束（constraints）：前置还是后置、多大分辨率</div>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const stream = await navigator.mediaDevices.getUserMedia({
+  video: {
+    facingMode: 'environment',              // 手机后置摄像头（'user' 为前置）
+    width: { ideal: 1920 },                 // ideal：尽量满足，不强制
+    height: { ideal: 1080 }
+  },
+  audio: false
+});
+
+// 列出所有设备（授权后才有设备名称）
+const devices = await navigator.mediaDevices.enumerateDevices();
+
+// 用完一定要关闭，摄像头指示灯才会熄灭
+stream.getTracks().forEach(track => track.stop());
+</script>
+  </div>
+  <p>上传照片时，用 <code>canvas.toBlob(cb, 'image/jpeg', 0.9)</code> 得到 Blob 比 Data URL 更省内存，也能直接放进 <code>FormData</code>。</p>
+</div>
+
+<h2 id="r18-3"><span class="rn">18.3</span>用摄像头录制视频</h2>
+
+<p class="prob">录一段带声音的视频，并在浏览器里回放。</p>
+
+<ol class="steps">
+  <li>用 <code>getUserMedia</code> 打开摄像头和麦克风的流</li>
+  <li>用 <code>&lt;video&gt;</code> 预览画面</li>
+  <li>用 <code>MediaRecorder</code> 录制</li>
+  <li>录完后在同一个 <code>&lt;video&gt;</code> 中回放</li>
+</ol>
+
+<div class="code" data-lang="html" data-file="18-07-video-element.html">
+<script type="text/plain">
+<video id="preview" muted></video>
+<button id="record-button">Record</button>
+<button id="stop-record-button">Stop Recording</button>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="18-08-open-stream.js">
+<script type="text/plain">
+const preview = document.querySelector('#preview');
+
+const stream = await navigator.mediaDevices.getUserMedia({
+  video: true,
+  audio: true
+});
+
+preview.srcObject = stream;
+preview.play();
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="18-09-set-up-mediarecorder.js">
+<script type="text/plain">
+mediaRecorder = new MediaRecorder(stream, {
+  mimeType: 'video/webm'   // 参见 18.1 节：实际项目中请用 isTypeSupported 挑选
+});
+
+mediaRecorder.addEventListener('dataavailable', event => {
+  const blob = new Blob([event.data], { type: 'video/webm' });
+  const url = URL.createObjectURL(blob);
+
+  // 取消静音，回放时才有声音
+  preview.muted = false;
+
+  // 把视频源从「实时流」换成「录好的文件」
+  preview.srcObject = null;
+  preview.src = url;
+
+  // 立即循环播放，并显示控件
+  preview.autoplay = true;
+  preview.loop = true;
+  preview.controls = true;
+});
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="18-10-event-handlers.js">
+<script type="text/plain">
+document.querySelector('#record-button').addEventListener('click', () => {
+  mediaRecorder.start();
+});
+
+document.querySelector('#stop-record-button').addEventListener('click', () => {
+  mediaRecorder.stop();
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="预览时不静音会产生声音回授">
+  <text class="ttl on-r" x="20" y="24">预览不静音：</text>
+  <rect class="bx" x="20" y="36" width="110" height="44" rx="8"/><text class="lbl" x="75" y="63" text-anchor="middle">🎤 麦克风</text>
+  <path class="ln-r" d="M132 58 H186" marker-end="url(#ar-r)"/>
+  <rect class="bx" x="190" y="36" width="130" height="44" rx="8"/><text class="lbl" x="255" y="63" text-anchor="middle">&lt;video&gt; 预览</text>
+  <path class="ln-r" d="M322 58 H376" marker-end="url(#ar-r)"/>
+  <rect class="bx" x="380" y="36" width="110" height="44" rx="8"/><text class="lbl" x="435" y="63" text-anchor="middle">🔊 扬声器</text>
+  <path class="ln-r" d="M435 82 V100 H75 V84" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="255" y="116" text-anchor="middle">声音又被麦克风录进去 → 回声、刺耳的啸叫</text>
+  <text class="ttl on-g" x="520" y="24">解决：</text>
+  <text class="mono on-g" x="520" y="50">&lt;video muted&gt;</text>
+  <text class="sm" x="520" y="70">预览时只看画面</text>
+  <text class="mono on-g" x="520" y="98">preview.muted = false</text>
+  <text class="sm" x="520" y="118">回放录好的视频时再打开声音</text>
+  <text class="sm" x="380" y="156" text-anchor="middle">另外，浏览器的自动播放策略也允许静音视频自动播放（第 6 章）</text>
+</svg>
+<figcaption>图 18-4　为什么预览时要 muted</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：摄像头预览、拍照、录像、滤镜（需要授权；画面只在本地处理）</div>
+  <div class="b">
+    <div class="row">
+      <button id="cam-start">打开摄像头</button>
+      <button id="cam-shot" disabled>拍照</button>
+      <button id="cam-rec" disabled>● 录像</button>
+      <button id="cam-stoprec" disabled>■ 停止录像</button>
+      <button id="cam-off" disabled>关闭摄像头</button>
+    </div>
+    <div class="row">
+      <label class="hint">滤镜
+        <select id="cam-filter">
+          <option value="none">无</option>
+          <option value="hue-rotate(90deg)" selected>hue-rotate(90deg)</option>
+          <option value="grayscale(1)">grayscale(1)</option>
+          <option value="sepia(1)">sepia(1)</option>
+          <option value="invert(1)">invert(1)</option>
+          <option value="blur(4px)">blur(4px)</option>
+        </select>
+      </label>
+      <span class="hint" id="cam-msg"></span>
+    </div>
+    <div class="media-box">
+      <div><video id="cam-video" muted playsinline></video><div class="cap">&lt;video&gt; 实时预览</div></div>
+      <div><canvas id="cam-canvas"></canvas><div class="cap">&lt;canvas&gt; + CSS filter（18.5）</div></div>
+      <div><img id="cam-photo" alt=""><div class="cap">拍下的照片（18.2）</div></div>
+      <div><video id="cam-replay" controls playsinline></video><div class="cap">录好的视频（18.3）</div></div>
+    </div>
+  </div>
+</div>
+
+<h2 id="r18-4"><span class="rn">18.4</span>检测系统的媒体能力</h2>
+
+<p class="prob">你想知道浏览器能否流畅播放某种格式的音视频。</p>
+
+<div class="code" data-lang="js" data-file="18-11-checking-capabilities.js">
+<script type="text/plain">
+navigator.mediaCapabilities.decodingInfo({
+  type: 'file',
+  audio: {
+    contentType: 'audio/mp3'   // 标准的 MIME 类型其实是 'audio/mpeg'
+  }
+}).then(result => {
+  if (result.supported) {
+    // 支持 MP3
+  }
+});
+
+navigator.mediaCapabilities.decodingInfo({
+  type: 'file',
+  audio: {
+    contentType: 'audio/webm;codecs=opus'
+  }
+}).then(result => {
+  if (result.supported) {
+    // 支持 Opus 编码的 WebM 音频
+  }
+});
+</script>
+</div>
+
+<p>对视频，还可以带上码率、帧率、分辨率一起查询：</p>
+
+<div class="code" data-lang="js" data-file="18-12-check-video-format.js">
+<script type="text/plain">
+navigator.mediaCapabilities.decodingInfo({
+  type: 'file',
+  video: {
+    contentType: 'video/webm;codecs=vp8',
+    bitrate: 4000000,   // 4 Mbps（原书注释写成 4 MB，单位其实是比特每秒）
+    framerate: 30,
+    width: 1920,
+    height: 1080
+  }
+}).then(result => {
+  if (result.supported) {
+    // 支持这种 WebM 配置
+  }
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="decodingInfo 返回的三个布尔值">
+  <rect class="bx-b" x="20" y="40" width="230" height="70" rx="10"/>
+  <text class="mono on-b" x="135" y="66" text-anchor="middle">decodingInfo(配置)</text>
+  <text class="sm" x="135" y="88" text-anchor="middle">编码格式 + 分辨率 + 码率 + 帧率</text>
+  <path class="ln" d="M252 75 H300" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="304" y="20" width="140" height="34" rx="8"/><text class="mono on-g" x="374" y="42" text-anchor="middle">supported</text>
+  <rect class="bx-g" x="304" y="58" width="140" height="34" rx="8"/><text class="mono on-g" x="374" y="80" text-anchor="middle">smooth</text>
+  <rect class="bx-g" x="304" y="96" width="140" height="34" rx="8"/><text class="mono on-g" x="374" y="118" text-anchor="middle">powerEfficient</text>
+  <text class="sm" x="460" y="42">能不能播放</text>
+  <text class="sm" x="460" y="80">能不能流畅播放（不掉帧）</text>
+  <text class="sm" x="460" y="118">是否省电（通常意味着有硬件解码）</text>
+</svg>
+<figcaption>图 18-5　比 canPlayType 更细致：不仅问「能不能」，还问「好不好」</figcaption>
+</figure>
+
+<p>
+  视频网站可以据此选择最合适的清晰度和编码：比如设备能流畅、省电地解码 AV1 就用 AV1，否则退回 H.264。
+  另有 <code>encodingInfo()</code> 用于查询编码（录制、视频通话）能力。老式的检测方法 <code>video.canPlayType('video/webm')</code> 只返回 <code>''</code>、<code>'maybe'</code>、<code>'probably'</code> 这种模糊的答案。
+</p>
+
+<div class="demo">
+  <div class="h">试一试：你的浏览器的解码能力</div>
+  <div class="b">
+    <div class="row"><button id="mc-btn">检测</button></div>
+    <div class="out" id="mc-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r18-5"><span class="rn">18.5</span>给视频加滤镜</h2>
+
+<p class="prob">给摄像头画面加上滤镜效果。</p>
+
+<p>原书的思路：把视频流放进一个隐藏的 <code>&lt;video&gt;</code>，按一定帧率把每一帧画到 <code>&lt;canvas&gt;</code> 上，再对画布应用 CSS 滤镜。</p>
+
+<div class="code" data-lang="html" data-file="18-13-markup.html">
+<script type="text/plain">
+<canvas id="canvas"></canvas>
+<video id="preview" style="display: none;"></video>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="18-14-video-stream.js（已修正）">
+<script type="text/plain">
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+
+  preview.srcObject = stream;
+  await preview.play();
+
+  // 使用视频的真实分辨率（原书用 canvas.width * devicePixelRatio，理由同 18.2 节）
+  canvas.width = preview.videoWidth;
+  canvas.height = preview.videoHeight;
+  const context = canvas.getContext('2d');
+
+  // 原书写的是 setInterval(…, 30 / 1000)：间隔是 0.03 毫秒而不是 30 FPS！
+  // 30 FPS 应为 1000 / 30 ≈ 33 毫秒。更好的办法是跟随屏幕刷新（第 1 章的 rAF）：
+  function draw() {
+    context.drawImage(preview, 0, 0, canvas.width, canvas.height);
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+}
+</script>
+</div>
+
+<div class="code" data-lang="css" data-file="18-15-css-filter.css">
+<script type="text/plain">
+#canvas {
+  filter: hue-rotate(90deg);
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="逐帧把视频画到画布上再加滤镜">
+  <rect class="bx-d" x="20" y="40" width="160" height="90" rx="10"/>
+  <text class="lbl" x="100" y="70" text-anchor="middle">&lt;video&gt;（隐藏）</text>
+  <text class="sm" x="100" y="92" text-anchor="middle">只负责解码视频流</text>
+  <path class="ln-a" d="M182 85 H250" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="216" y="76" text-anchor="middle" style="font-size:11px">每一帧</text>
+  <text class="mono on-a" x="216" y="104" text-anchor="middle" style="font-size:11px">drawImage</text>
+  <rect class="bx-a" x="254" y="40" width="200" height="90" rx="10"/>
+  <text class="lbl on-a" x="354" y="70" text-anchor="middle">&lt;canvas&gt;</text>
+  <text class="mono" x="354" y="92" text-anchor="middle" style="font-size:11px">filter: hue-rotate(90deg)</text>
+  <text class="sm" x="354" y="112" text-anchor="middle">显示的是滤镜后的效果</text>
+  <path class="ln" d="M456 85 H500" marker-end="url(#ar)"/>
+  <rect class="bx" x="504" y="30" width="236" height="110" rx="10"/>
+  <text class="ttl" x="622" y="54" text-anchor="middle">选哪种写法？</text>
+  <text class="sm" x="516" y="78">只想「看起来」有滤镜：直接对 &lt;video&gt;</text>
+  <text class="sm" x="516" y="94">  设置 CSS filter，不需要画布</text>
+  <text class="sm" x="516" y="114">需要拿到滤镜后的像素（拍照、录制）：</text>
+  <text class="sm" x="516" y="130">  用 ctx.filter 在画布上绘制</text>
+</svg>
+<figcaption>图 18-6　视频 → 画布 → 滤镜</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; CSS filter 与 ctx.filter 的区别</div>
+  <p>
+    对画布元素应用 CSS <code>filter</code> 只改变它<strong>在屏幕上的显示</strong>，画布里的像素并没有变，此时 <code>toDataURL()</code> 导出的仍是原图。
+    如果要导出带滤镜的照片，应该在绘制时设置 <code>context.filter = 'hue-rotate(90deg)'</code>（<span class="bl newly">Baseline 2024</span>），
+    这样滤镜会被真正「画」进像素里。本页演示的拍照就是这样做的。
+  </p>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 更精准的逐帧处理：requestVideoFrameCallback</div>
+  <p>
+    <code>requestAnimationFrame</code> 按屏幕刷新率调用，但视频可能只有 30 帧（屏幕却是 120Hz），多画了很多重复帧。
+    <code>video.requestVideoFrameCallback(cb)</code> 只在视频<strong>真正有新帧</strong>时回调，更省资源。<span class="bl newly">Baseline 2024</span>
+    更复杂的实时处理（美颜、背景虚化）可以研究 WebCodecs、WebGL / WebGPU 与 Insertable Streams。
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+function draw() {
+  context.drawImage(preview, 0, 0, canvas.width, canvas.height);
+  preview.requestVideoFrameCallback(draw);
+}
+preview.requestVideoFrameCallback(draw);
+</script>
+  </div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li><code>getUserMedia</code>（摄像头 / 麦克风）和 <code>getDisplayMedia</code>（屏幕）返回 <code>MediaStream</code>；需要 HTTPS 和用户授权。</li>
+  <li>预览：<code>video.srcObject = stream</code>；录音录像时预览要 <code>muted</code>，避免回授。</li>
+  <li>拍照：把当前帧 <code>drawImage</code> 到画布，尺寸用 <code>videoWidth / videoHeight</code>，导出用 <code>toDataURL</code> 或 <code>toBlob</code>。</li>
+  <li>录制：<code>MediaRecorder</code> 的 <code>start / stop</code> + <code>dataavailable</code>；用 <code>isTypeSupported</code> 选择格式。</li>
+  <li>能力检测：<code>navigator.mediaCapabilities.decodingInfo()</code> 返回 <code>supported / smooth / powerEfficient</code>。</li>
+  <li>用完调用 <code>track.stop()</code> 关闭设备；逐帧处理用 rAF 或 <code>requestVideoFrameCallback</code>，不要写错定时器间隔。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个「证件照」小工具：打开前置摄像头，画面中叠加一个人像轮廓引导框，拍照后裁剪为 3:4 并下载。</li>
+    <li>给录屏功能加上计时器（第 1 章 rAF）和「同时录制麦克风声音」选项（提示：<code>getDisplayMedia({ audio: true })</code> 或把两条流的轨道合并到一个 <code>new MediaStream([...])</code>）。</li>
+    <li>用 <code>start(1000)</code> 每秒拿到一段数据块，把数据块存进数组，停止后合并成一个 Blob —— 这是上传大录像时「边录边传」的基础。</li>
+    <li>写一个函数，按 AV1 → VP9 → H.264 的顺序用 <code>decodingInfo</code> 找出当前设备能流畅播放的第一种编码。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  function pickType() {
+    if (!window.MediaRecorder) return '';
+    return ['video/webm;codecs=vp9', 'video/webm', 'video/mp4'].find(function (t) { return MediaRecorder.isTypeSupported(t); }) || '';
+  }
+
+  // ---- 录屏 ----
+  var scMsg = document.getElementById('sc-msg'), scVideo = document.getElementById('sc-video');
+  var scStart = document.getElementById('sc-start'), scStop = document.getElementById('sc-stop'), scRec, scStream;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) { scStart.disabled = true; scMsg.textContent = '当前浏览器不支持 getDisplayMedia'; }
+  scStart.onclick = async function () {
+    try {
+      scStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      var type = pickType();
+      scRec = new MediaRecorder(scStream, type ? { mimeType: type } : undefined);
+      scRec.addEventListener('dataavailable', function (e) {
+        scVideo.src = URL.createObjectURL(new Blob([e.data], { type: e.data.type || type }));
+        scVideo.style.display = 'block';
+        scMsg.textContent = '录制完成（' + (e.data.type || type) + '，' + Math.round(e.data.size / 1024) + ' KB）';
+      });
+      scRec.addEventListener('stop', function () { scStream.getTracks().forEach(function (t) { t.stop(); }); scStart.disabled = false; scStop.disabled = true; });
+      scRec.start();
+      scMsg.textContent = '录制中……（mimeType: ' + (type || '浏览器默认') + '）';
+      scStart.disabled = true; scStop.disabled = false;
+    } catch (e) { scMsg.textContent = e.name + ': ' + e.message; }
+  };
+  scStop.onclick = function () { if (scRec && scRec.state !== 'inactive') scRec.stop(); };
+
+  // ---- 摄像头 ----
+  var v = document.getElementById('cam-video'), cv = document.getElementById('cam-canvas'), img = document.getElementById('cam-photo');
+  var replay = document.getElementById('cam-replay'), msg = document.getElementById('cam-msg'), filterSel = document.getElementById('cam-filter');
+  var btn = { start: 'cam-start', shot: 'cam-shot', rec: 'cam-rec', stoprec: 'cam-stoprec', off: 'cam-off' };
+  Object.keys(btn).forEach(function (k) { btn[k] = document.getElementById(btn[k]); });
+  var stream, rec, raf;
+  function applyFilter() { cv.style.filter = filterSel.value; }
+  filterSel.onchange = applyFilter; applyFilter();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { btn.start.disabled = true; msg.textContent = '当前浏览器不支持 getUserMedia（或页面不是 HTTPS）'; }
+  btn.start.onclick = async function () {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (e) {
+      try { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); msg.textContent = '（未获得麦克风，仅视频）'; }
+      catch (e2) { msg.textContent = e2.name + ': ' + e2.message; return; }
+    }
+    v.srcObject = stream; await v.play();
+    cv.width = v.videoWidth; cv.height = v.videoHeight;
+    var ctx = cv.getContext('2d');
+    (function draw() { ctx.drawImage(v, 0, 0, cv.width, cv.height); raf = requestAnimationFrame(draw); })();
+    btn.start.disabled = true; btn.shot.disabled = btn.rec.disabled = btn.off.disabled = false;
+    msg.textContent = '摄像头已打开：' + v.videoWidth + '×' + v.videoHeight;
+  };
+  btn.shot.onclick = function () {
+    var c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+    var ctx = c.getContext('2d');
+    if ('filter' in ctx) ctx.filter = filterSel.value;   // 把滤镜画进像素
+    ctx.drawImage(v, 0, 0, c.width, c.height);
+    img.src = c.toDataURL('image/jpeg', 0.9);
+  };
+  btn.rec.onclick = function () {
+    var type = pickType();
+    rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    rec.addEventListener('dataavailable', function (e) {
+      replay.src = URL.createObjectURL(new Blob([e.data], { type: e.data.type || type }));
+      replay.muted = false; replay.loop = true; replay.play().catch(function () {});
+    });
+    rec.start();
+    btn.rec.disabled = true; btn.stoprec.disabled = false; msg.textContent = '录像中…';
+  };
+  btn.stoprec.onclick = function () { rec.stop(); btn.rec.disabled = false; btn.stoprec.disabled = true; msg.textContent = '录像完成'; };
+  btn.off.onclick = function () {
+    if (rec && rec.state !== 'inactive') rec.stop();
+    cancelAnimationFrame(raf);
+    stream.getTracks().forEach(function (t) { t.stop(); });
+    v.srcObject = null;
+    btn.start.disabled = false; btn.shot.disabled = btn.rec.disabled = btn.stoprec.disabled = btn.off.disabled = true;
+    msg.textContent = '已关闭（所有轨道 stop()，摄像头指示灯熄灭）';
+  };
+
+  // ---- 媒体能力 ----
+  document.getElementById('mc-btn').onclick = async function () {
+    var o = document.getElementById('mc-out');
+    if (!navigator.mediaCapabilities) { o.textContent = '不支持 Media Capabilities API'; return; }
+    var cfgs = [
+      ['audio/mpeg', { type: 'file', audio: { contentType: 'audio/mpeg' } }],
+      ['audio/webm;codecs=opus', { type: 'file', audio: { contentType: 'audio/webm;codecs=opus' } }],
+      ['video/webm;codecs=vp8 1080p30', { type: 'file', video: { contentType: 'video/webm;codecs=vp8', bitrate: 4e6, framerate: 30, width: 1920, height: 1080 } }],
+      ['video/webm;codecs=vp9 4K60', { type: 'file', video: { contentType: 'video/webm;codecs=vp9', bitrate: 2e7, framerate: 60, width: 3840, height: 2160 } }],
+      ['video/mp4;codecs=avc1.640028 1080p', { type: 'file', video: { contentType: 'video/mp4;codecs=avc1.640028', bitrate: 5e6, framerate: 30, width: 1920, height: 1080 } }],
+      ['video/mp4;codecs=av01.0.08M.08 1080p', { type: 'file', video: { contentType: 'video/mp4;codecs=av01.0.08M.08', bitrate: 5e6, framerate: 30, width: 1920, height: 1080 } }]
+    ];
+    var lines = [];
+    for (var i = 0; i < cfgs.length; i++) {
+      try {
+        var r = await navigator.mediaCapabilities.decodingInfo(cfgs[i][1]);
+        lines.push((r.supported ? '✓' : '✗') + ' ' + cfgs[i][0].padEnd(36, ' ') + ' smooth=' + r.smooth + ' powerEfficient=' + r.powerEfficient);
+      } catch (e) { lines.push('? ' + cfgs[i][0] + '  ' + e.message); }
+    }
+    o.textContent = lines.join('\n');
+  };
+})();
+</script>
+</body>
+</html>

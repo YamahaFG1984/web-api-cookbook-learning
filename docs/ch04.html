@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 4 章 · 网络请求 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="4">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 4 章</span>
+<h1>网络请求</h1>
+<p class="lede">
+  几乎每个 Web 应用都要和服务器说话：拉取数据、提交表单、上传文件、接收实时推送。
+  这一章从「老前辈」XMLHttpRequest 讲到今天的标准 Fetch，再到三种特殊用途的通道：Beacon、Server-Sent Events 和 WebSocket。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>知道 XMLHttpRequest 与 Fetch 的关系，会用 Fetch 发 GET / POST / 上传文件</li>
+    <li>理解 Fetch 的两段式结构，以及「404 不会让 Promise 失败」这个新手最大的坑</li>
+    <li>弄懂 CORS 跨域报错是怎么回事</li>
+    <li>用 Beacon 可靠地发送统计数据</li>
+    <li>分清轮询、SSE、WebSocket 三种实时通信方式，并知道各自适合什么场景</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">从 Ajax 到 Fetch</h2>
+
+<p>
+  2000 年代中期，Gmail 和 Google Maps 让人们第一次见识到「不刷新页面也能加载新数据」的网页。
+  这种技术被称为 <strong>Ajax</strong>（Asynchronous JavaScript and XML），它背后的 API 就是 <code>XMLHttpRequest</code>（简称 XHR）。
+  名字里虽然有 XML，但它同样可以收发 JSON、表单和二进制数据。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="浏览器网络 API 的演进时间线">
+  <path class="ln" d="M20 100 H740" marker-end="url(#ar)"/>
+  <circle cx="70"  cy="100" r="6" style="fill:var(--fg-faint)"/>
+  <circle cx="190" cy="100" r="6" style="fill:var(--blue)"/>
+  <circle cx="310" cy="100" r="6" style="fill:var(--purple)"/>
+  <circle cx="430" cy="100" r="6" style="fill:var(--accent)"/>
+  <circle cx="550" cy="100" r="6" style="fill:var(--green)"/>
+  <circle cx="670" cy="100" r="6" style="fill:var(--fg-faint)"/>
+
+  <text class="ttl" x="70" y="76" text-anchor="middle">~2000</text>
+  <text class="sm" x="70" y="128" text-anchor="middle">XMLHttpRequest</text>
+  <text class="sm" x="70" y="144" text-anchor="middle">诞生于 IE5</text>
+
+  <text class="ttl on-b" x="190" y="76" text-anchor="middle">2006</text>
+  <text class="sm" x="190" y="128" text-anchor="middle">jQuery.ajax</text>
+  <text class="sm" x="190" y="144" text-anchor="middle">第三方库包装 XHR</text>
+
+  <text class="ttl on-p" x="310" y="76" text-anchor="middle">2011</text>
+  <text class="sm" x="310" y="128" text-anchor="middle">WebSocket · SSE</text>
+  <text class="sm" x="310" y="144" text-anchor="middle">实时双向 / 单向推送</text>
+
+  <text class="ttl on-a" x="430" y="76" text-anchor="middle">2015</text>
+  <text class="sm" x="430" y="128" text-anchor="middle">Fetch API</text>
+  <text class="sm" x="430" y="144" text-anchor="middle">基于 Promise</text>
+
+  <text class="ttl on-g" x="550" y="76" text-anchor="middle">2017+</text>
+  <text class="sm" x="550" y="128" text-anchor="middle">Beacon · Streams</text>
+  <text class="sm" x="550" y="144" text-anchor="middle">AbortController</text>
+
+  <text class="ttl" x="670" y="76" text-anchor="middle">今天</text>
+  <text class="sm" x="670" y="128" text-anchor="middle">Fetch 是标准</text>
+  <text class="sm" x="670" y="144" text-anchor="middle">Node/Deno/Bun 也内置</text>
+</svg>
+<figcaption>图 4-1　浏览器网络 API 简史</figcaption>
+</figure>
+
+<p>本章涉及的通信方式一览：</p>
+
+<div class="tw">
+<table>
+  <tr><th>API</th><th>方向</th><th>连接</th><th>典型用途</th></tr>
+  <tr><td>XMLHttpRequest / Fetch</td><td>请求 → 响应</td><td>一次一个</td><td>加载数据、提交表单、上传文件</td></tr>
+  <tr><td>Beacon</td><td>浏览器 → 服务器（单向）</td><td>发完就走，不看响应</td><td>页面关闭前发送统计数据</td></tr>
+  <tr><td>Server-Sent Events</td><td>服务器 → 浏览器（单向）</td><td>长连接</td><td>通知、行情、日志、AI 流式输出</td></tr>
+  <tr><td>WebSocket</td><td>双向</td><td>长连接</td><td>聊天、协同编辑、在线游戏</td></tr>
+</table>
+</div>
+
+<h2 id="r4-1"><span class="rn">4.1</span>用 XMLHttpRequest 发请求</h2>
+
+<p class="prob">你要向接口发 GET 请求，而且需要兼容不支持 Fetch 的老浏览器。</p>
+
+<p>XHR 是基于事件的 API，使用步骤固定为四步：</p>
+
+<ol class="steps">
+  <li>创建 <code>new XMLHttpRequest()</code></li>
+  <li>监听 <code>load</code> 事件，在里面读取响应</li>
+  <li>调用 <code>open(方法, URL)</code></li>
+  <li>调用 <code>send()</code> 真正发出请求</li>
+</ol>
+
+<div class="code" data-lang="js" data-file="4-01-xhr.js">
+<script type="text/plain">
+/**
+ * 从 /api/users 加载用户数据并打印
+ */
+function getUsers() {
+  const request = new XMLHttpRequest();
+
+  request.addEventListener('load', event => {
+    // event.target 就是这个 XHR 本身，responseText 是响应的原始文本
+    const users = JSON.parse(event.target.responseText);
+    console.log('Got users:', users);
+  });
+
+  // 只处理「网络错误」（断网、DNS 失败、CORS 被拒等）。
+  // 如果服务器返回 404 或 500，触发的仍然是 load 事件！
+  request.addEventListener('error', err => {
+    console.log('Error!', err);
+  });
+
+  request.open('GET', '/api/users');
+  request.send();
+}
+</script>
+</div>
+
+<p>
+  注意注释里的关键一句：<strong>HTTP 错误状态码（404、500）不会触发 <code>error</code> 事件</strong>。
+  对浏览器来说，服务器回了话就算「请求成功」，至于回的是什么内容，要你自己检查 <code>event.target.status</code>。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; XHR 还有用吗？</div>
+  <p>
+    Fetch 已经被所有浏览器支持了很多年，新代码基本都用 Fetch。XHR 目前唯一的实用优势是
+    <strong>上传进度</strong>：<code>xhr.upload.addEventListener('progress', …)</code> 可以显示「已上传 45%」，而 Fetch 至今没有等价的简单写法。
+  </p>
+</div>
+
+<h2 id="r4-2"><span class="rn">4.2</span>用 Fetch 发 GET 请求</h2>
+
+<p class="prob">你想在现代浏览器里用更简洁的方式发 GET 请求。</p>
+
+<div class="code" data-lang="js" data-file="4-02-fetch-get.js">
+<script type="text/plain">
+/**
+ * 请求 /api/users 并解析 JSON
+ * @returns 一个 Promise，兑现为用户数组
+ */
+function loadUsers() {
+  return fetch('/api/users')
+    // 把响应体解析为对象
+    .then(response => response.json())
+    // 处理错误：网络错误、JSON 解析错误
+    .catch(error => console.error('Unable to fetch:', error.message));
+}
+
+loadUsers().then(users => {
+  console.log('Got users:', users);
+});
+</script>
+</div>
+
+<p>
+  Fetch 是<strong>两段式</strong>的：<code>fetch()</code> 返回的 Promise 在<strong>响应头</strong>到达时就兑现了，得到一个 <code>Response</code> 对象；
+  响应<strong>体</strong>可能还在路上，需要再调用 <code>response.json()</code>（或 <code>text()</code>、<code>blob()</code>……）读取，它又返回一个 Promise。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="fetch 的两段式流程与错误分支">
+  <rect class="bx-b" x="20" y="30" width="130" height="50" rx="8"/>
+  <text class="mono on-b" x="85" y="60" text-anchor="middle">fetch(url)</text>
+
+  <path class="ln" d="M152 55 H196" marker-end="url(#ar)"/>
+  <polygon points="270,20 340,55 270,90 200,55" style="fill:var(--panel);stroke:var(--line-2);stroke-width:1.5"/>
+  <text class="sm" x="270" y="52" text-anchor="middle">服务器</text>
+  <text class="sm" x="270" y="66" text-anchor="middle">回应了吗？</text>
+
+  <path class="ln-r" d="M270 90 V200" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="262" y="150" text-anchor="end">没有（断网 / CORS / 超时）</text>
+  <rect class="bx-r" x="170" y="204" width="200" height="40" rx="8"/>
+  <text class="lbl on-r" x="270" y="229" text-anchor="middle">Promise 拒绝 → catch</text>
+
+  <path class="ln-g" d="M340 55 H390" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="365" y="46" text-anchor="middle">有</text>
+  <rect class="bx-g" x="394" y="30" width="150" height="50" rx="8"/>
+  <text class="lbl on-g" x="469" y="52" text-anchor="middle">Response 对象</text>
+  <text class="sm" x="469" y="69" text-anchor="middle">status / headers 已到</text>
+
+  <path class="ln" d="M469 82 V110" marker-end="url(#ar)"/>
+  <polygon points="469,114 539,146 469,178 399,146" style="fill:var(--panel);stroke:var(--line-2);stroke-width:1.5"/>
+  <text class="mono" x="469" y="150" text-anchor="middle">response.ok?</text>
+
+  <path class="ln-a" d="M469 178 V230 H390" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="480" y="206">false（404 / 500…）</text>
+  <text class="sm on-a" x="480" y="222">Promise 仍然是「兑现」！</text>
+  <text class="sm on-a" x="480" y="238">需要你自己 throw</text>
+
+  <path class="ln-g" d="M539 146 H590" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="564" y="138" text-anchor="middle">true</text>
+  <rect class="bx-g" x="594" y="118" width="146" height="56" rx="8"/>
+  <text class="mono on-g" x="667" y="142" text-anchor="middle">response.json()</text>
+  <text class="sm" x="667" y="160" text-anchor="middle">第二段：读取响应体</text>
+  <path class="ln-g" d="M667 176 V246" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="594" y="250" width="146" height="34" rx="8"/>
+  <text class="lbl on-g" x="667" y="272" text-anchor="middle">数据对象</text>
+</svg>
+<figcaption>图 4-2　fetch 只有在「根本没拿到响应」时才拒绝</figcaption>
+</figure>
+
+<div class="box warn">
+  <div class="t">&#9888; 新手第一大坑：404 不会进 catch</div>
+  <p>
+    和 XHR 一样，<code>fetch</code> 只在网络层面失败时才拒绝。服务器返回 404 或 500，Promise 照样兑现，
+    原书的 <code>loadUsers</code> 会拿着一个错误页面去 <code>json()</code>，然后得到一个莫名其妙的 JSON 解析错误。
+    正确的写法是<strong>检查 <code>response.ok</code></strong>（状态码 200–299 时为 <code>true</code>）：
+  </p>
+</div>
+
+<div class="code" data-lang="js" data-file="4-03-fetch-await.js（改进版）">
+<script type="text/plain">
+async function loadUsers() {
+  const response = await fetch('/api/users');
+
+  if (!response.ok) {
+    // 主动抛错，让调用方的 catch 能收到
+    throw new Error(`请求失败：${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+async function printUsers() {
+  try {
+    const users = await loadUsers();
+    console.log('Got users:', users);
+  } catch (error) {
+    console.error('Error loading users:', error);
+  }
+}
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：fetch 一个存在的文件和一个不存在的文件</div>
+  <div class="b">
+    <div class="row">
+      <button id="f-ok">fetch('assets/site.js')</button>
+      <button id="f-404">fetch('nope.json')</button>
+      <button id="f-bad">fetch('https://does-not-exist.invalid/')</button>
+    </div>
+    <div class="out" id="f-out">点击按钮查看结果……</div>
+    <p class="hint">需要通过 http(s) 访问本页（例如部署到 GitHub Pages 后）。直接双击打开本地文件时，浏览器会禁止 fetch。</p>
+  </div>
+</div>
+
+<p><code>Response</code> 对象上常用的成员：</p>
+
+<div class="tw">
+<table>
+  <tr><th>成员</th><th>说明</th></tr>
+  <tr><td><code>status</code> / <code>statusText</code></td><td>状态码与说明文字，如 <code>404</code> / <code>"Not Found"</code></td></tr>
+  <tr><td><code>ok</code></td><td>状态码在 200–299 之间时为 <code>true</code></td></tr>
+  <tr><td><code>headers.get(name)</code></td><td>读取响应头，如 <code>headers.get('Content-Type')</code></td></tr>
+  <tr><td><code>json()</code> / <code>text()</code></td><td>把响应体读成对象 / 字符串</td></tr>
+  <tr><td><code>blob()</code> / <code>arrayBuffer()</code> / <code>bytes()</code></td><td>读成二进制（图片、文件）。<code>bytes()</code> 直接返回 <code>Uint8Array</code><span class="bl newly">Baseline 2025</span></td></tr>
+  <tr><td><code>formData()</code></td><td>读成 <code>FormData</code></td></tr>
+  <tr><td><code>body</code></td><td>一个 <code>ReadableStream</code>，可以边下载边处理（见本章末尾）</td></tr>
+</table>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 响应体只能读一次</div>
+  <p>
+    响应体是一条「流」，读完就没了。先调了 <code>response.text()</code> 再调 <code>response.json()</code> 会报
+    <code>TypeError: body used already</code>。确实需要读两次的话，先 <code>response.clone()</code>。
+  </p>
+</div>
+
+<h2 id="r4-3"><span class="rn">4.3</span>用 Fetch 发 POST 请求</h2>
+
+<p class="prob">你要向接口发送 POST 请求，请求体是 JSON。</p>
+
+<p><code>fetch</code> 的第二个参数是一个配置对象，指定方法、请求体和请求头：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="一个 HTTP 请求由方法、URL、请求头、请求体组成">
+  <rect class="bx" x="20" y="16" width="420" height="170" rx="10"/>
+  <text class="mono on-a" x="36" y="44">POST</text><text class="mono" x="80" y="44">/api/users HTTP/1.1</text>
+  <text class="mono on-b" x="36" y="70">Content-Type: application/json</text>
+  <text class="mono on-b" x="36" y="90">Host: example.com</text>
+  <text class="mono on-g" x="36" y="130">{"firstName":"John",</text>
+  <text class="mono on-g" x="36" y="150"> "lastName":"Doe",</text>
+  <text class="mono on-g" x="36" y="170"> "department":"Engineering"}</text>
+
+  <path class="ln-a" d="M442 40 H500"/>
+  <text class="mono on-a" x="508" y="44">method: 'POST'</text>
+  <path class="ln-b" d="M442 80 H500"/>
+  <text class="mono on-b" x="508" y="84">headers: { … }</text>
+  <path class="ln-g" d="M442 150 H500"/>
+  <text class="mono on-g" x="508" y="154">body: JSON.stringify(…)</text>
+  <text class="sm" x="508" y="110">请求头和请求体之间有一个空行</text>
+</svg>
+<figcaption>图 4-3　fetch 配置项与 HTTP 报文各部分的对应</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="4-04-fetch-post.js">
+<script type="text/plain">
+/**
+ * 通过 POST /api/users 创建新用户
+ * @returns 一个 Promise，兑现为接口返回的响应体
+ */
+function createUser(firstName, lastName, department) {
+  return fetch('/api/users', {
+    method: 'POST',
+    // body 必须是字符串（或 FormData、Blob 等），所以对象要先转 JSON
+    body: JSON.stringify({ firstName, lastName, department }),
+    // 告诉服务器「我发的是 JSON」
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  })
+    .then(response => response.json());
+}
+
+createUser('John', 'Doe', 'Engineering')
+  .then(() => console.log('Created user!'))
+  .catch(error => console.error('Error creating user:', error));
+</script>
+</div>
+
+<p>也可以发送传统的表单编码数据：</p>
+
+<div class="code" data-lang="js" data-file="4-05-fetch-form-data.js">
+<script type="text/plain">
+fetch('/login', {
+  method: 'POST',
+  body: 'username=sysadmin&password=password',
+  headers: {
+    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+  }
+})
+  .then(response => response.json())
+  .then(data => console.log('Logged in!', data))
+  .catch(error => console.error('Request failed:', error));
+
+// 更好的写法：把 URLSearchParams 作为 body，浏览器会自动编码并设置 Content-Type
+fetch('/login', {
+  method: 'POST',
+  body: new URLSearchParams({ username: 'sysadmin', password: 'p@ss&word' })
+});
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th><code>body</code> 传什么</th><th>浏览器自动设置的 Content-Type</th><th>适合</th></tr>
+  <tr><td>字符串</td><td><code>text/plain;charset=UTF-8</code>（发 JSON 时要手动改）</td><td>JSON 接口</td></tr>
+  <tr><td><code>URLSearchParams</code></td><td><code>application/x-www-form-urlencoded</code></td><td>传统表单接口</td></tr>
+  <tr><td><code>FormData</code></td><td><code>multipart/form-data; boundary=…</code></td><td>表单 + 文件上传</td></tr>
+  <tr><td><code>Blob</code> / <code>File</code></td><td>取 Blob 自身的 <code>type</code></td><td>直接上传一个文件的原始内容</td></tr>
+</table>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 发 FormData 时不要手动设置 Content-Type</div>
+  <p>
+    <code>multipart/form-data</code> 需要一个随机的 <code>boundary</code>（分隔符）参数，只有浏览器知道它是什么。
+    如果你手动写 <code>'Content-Type': 'multipart/form-data'</code>，缺了 boundary，服务器就解析不了。
+  </p>
+</div>
+
+<h2 id="r4-4"><span class="rn">4.4</span>用 Fetch 上传文件</h2>
+
+<p class="prob">你想用 POST 请求把用户选择的文件传到服务器。</p>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<form id="upload-form">
+  <input type="file" name="file">
+  <button>上传</button>
+</form>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="4-06-fetch-upload.js">
+<script type="text/plain">
+/**
+ * 给定一个包含 name="file" 文件输入框的表单，发送 POST 请求上传文件内容
+ */
+function uploadFile(form) {
+  const formData = new FormData(form);
+  const fileData = formData.get('file');   // 一个 File 对象
+  return fetch('https://httpbin.org/post', {
+    method: 'POST',
+    body: fileData                          // 请求体就是文件的原始字节
+  })
+    .then(response => response.json());
+}
+</script>
+</div>
+
+<p>这里有两种上传方式，服务器端的接收方式不同，要和后端约定好：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="直接上传文件与 multipart 上传的区别">
+  <text class="ttl on-b" x="20" y="24">body: file（原书写法）</text>
+  <rect class="bx-b" x="20" y="36" width="340" height="140" rx="10"/>
+  <text class="mono" x="36" y="60">Content-Type: image/png</text>
+  <rect class="bx" x="36" y="76" width="308" height="84" rx="6"/>
+  <text class="sm" x="190" y="112" text-anchor="middle">文件的原始字节</text>
+  <text class="sm" x="190" y="130" text-anchor="middle">（请求体就是整个文件，没有文件名）</text>
+
+  <text class="ttl on-g" x="400" y="24">body: new FormData(form)</text>
+  <rect class="bx-g" x="400" y="36" width="340" height="140" rx="10"/>
+  <text class="mono" x="416" y="58">multipart/form-data; boundary=XyZ</text>
+  <rect class="bx" x="416" y="68" width="308" height="42" rx="6"/>
+  <text class="sm" x="428" y="86">--XyZ  name="title"</text>
+  <text class="sm" x="428" y="102">我的头像</text>
+  <rect class="bx" x="416" y="116" width="308" height="50" rx="6"/>
+  <text class="sm" x="428" y="134">--XyZ  name="file"; filename="me.png"</text>
+  <text class="sm" x="428" y="152">（文件的原始字节）</text>
+</svg>
+<figcaption>图 4-4　直接上传只有文件本身；multipart 可以同时带多个字段和文件名</figcaption>
+</figure>
+
+<p>大多数后端框架处理「文件上传」时期待的是 multipart 格式，也就是直接把 <code>FormData</code> 作为 body：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    body: new FormData(form)   // 文件名、其他字段一起发送
+  });
+  if (!response.ok) throw new Error('上传失败');
+});
+</script>
+</div>
+
+<h2 id="cors">插曲：CORS 跨域</h2>
+
+<p>
+  学网络请求，几乎一定会遇到控制台里这行红字：<em>「…has been blocked by CORS policy」</em>。这不是你的代码写错了，而是浏览器的安全机制在起作用。
+</p>
+
+<p>
+  <strong>同源策略</strong>：默认情况下，<code>https://a.com</code> 上的脚本<strong>可以发出</strong>请求到 <code>https://b.com</code>，
+  但<strong>不能读取</strong>响应内容 —— 除非 <code>b.com</code> 的响应头里明确说「我允许 a.com 读」。这个「明确说」的机制就是
+  <strong>CORS</strong>（跨源资源共享）。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="CORS 预检请求的时序图">
+  <rect class="bx-b" x="40" y="14" width="200" height="36" rx="8"/>
+  <text class="lbl on-b" x="140" y="37" text-anchor="middle">浏览器（页面在 a.com）</text>
+  <rect class="bx-g" x="520" y="14" width="200" height="36" rx="8"/>
+  <text class="lbl on-g" x="620" y="37" text-anchor="middle">服务器 api.b.com</text>
+  <path class="ln-d" d="M140 52 V290 M620 52 V290"/>
+
+  <text class="sm" x="380" y="74" text-anchor="middle">① 「非简单请求」（如 JSON 的 POST、带自定义头）先发预检</text>
+  <path class="ln-a" d="M140 86 H616" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="380" y="104" text-anchor="middle">OPTIONS /users   Origin: https://a.com</text>
+
+  <path class="ln-g" d="M620 124 H144" marker-end="url(#ar-g)"/>
+  <text class="mono on-g" x="380" y="142" text-anchor="middle">Access-Control-Allow-Origin: https://a.com</text>
+  <text class="mono on-g" x="380" y="158" text-anchor="middle">Access-Control-Allow-Headers: Content-Type</text>
+
+  <text class="sm" x="380" y="184" text-anchor="middle">② 预检通过，才发送真正的请求</text>
+  <path class="ln-b" d="M140 196 H616" marker-end="url(#ar-b)"/>
+  <text class="mono on-b" x="380" y="214" text-anchor="middle">POST /users   Origin: https://a.com</text>
+  <path class="ln-g" d="M620 234 H144" marker-end="url(#ar-g)"/>
+  <text class="mono on-g" x="380" y="252" text-anchor="middle">200 OK   Access-Control-Allow-Origin: https://a.com</text>
+  <text class="sm" x="380" y="280" text-anchor="middle">③ 响应头允许 a.com → JS 才能读取响应；否则浏览器拦下并报 CORS 错误</text>
+</svg>
+<figcaption>图 4-5　CORS 是服务器通过响应头「授权」浏览器读取响应</figcaption>
+</figure>
+
+<div class="box key">
+  <div class="t">&#128273; 记住三点</div>
+  <ul>
+    <li>CORS 是<strong>服务器端</strong>的配置。前端代码无法「绕过」CORS，只能让后端加响应头，或者通过同源的代理转发。</li>
+    <li>CORS 错误时 <code>fetch</code> 会<strong>拒绝</strong>（TypeError），但出于安全原因你拿不到具体原因，只能看控制台。</li>
+    <li><code>mode: 'no-cors'</code> <strong>不是</strong>解决办法：它让请求能发出去，但响应变成「不透明」的，你一个字节也读不到。</li>
+  </ul>
+</div>
+
+<h2 id="r4-5"><span class="rn">4.5</span>发送 Beacon</h2>
+
+<p class="prob">你想发一个「发完就不管」的请求，比如用户离开页面时上报统计数据。</p>
+
+<p>
+  用户关闭标签页时，页面上正在进行的 <code>fetch</code> 很可能被浏览器直接掐断。
+  <code>navigator.sendBeacon()</code> 把请求交给浏览器在后台完成，<strong>即使页面已经卸载也会发出去</strong>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="页面卸载时 fetch 可能被取消，而 beacon 由浏览器接管">
+  <path class="ln" d="M20 150 H740" marker-end="url(#ar)"/>
+  <text class="sm" x="740" y="170" text-anchor="end">时间 →</text>
+  <rect class="bx-a" x="330" y="16" width="4" height="134" style="fill:var(--accent)"/>
+  <text class="sm on-a" x="340" y="28">用户切走 / 关闭标签页</text>
+  <text class="sm on-a" x="340" y="42">visibilitychange → hidden</text>
+
+  <rect class="bx-r" x="200" y="60" width="130" height="30" rx="6"/>
+  <text class="sm on-r" x="265" y="80" text-anchor="middle">普通 fetch 进行中</text>
+  <text class="lbl on-r" x="352" y="80">✗ 页面销毁，请求被取消</text>
+
+  <rect class="bx-g" x="334" y="104" width="220" height="30" rx="6"/>
+  <text class="sm on-g" x="444" y="124" text-anchor="middle">sendBeacon：浏览器在后台送达</text>
+  <text class="lbl on-g" x="566" y="124">✓</text>
+</svg>
+<figcaption>图 4-6　Beacon 的请求生命周期不依赖页面</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="4-07-send-beacon.js（已修正）">
+<script type="text/plain">
+const currentUser = {
+  username: 'sysadmin'
+};
+
+// 要上报的统计数据
+const data = {
+  user: currentUser.username,
+  lastVisited: new Date()
+};
+
+// 页面变为隐藏时发送
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    // 原书直接传了 data 对象，会被转成字符串 "[object Object]"！
+    // sendBeacon 的数据必须是字符串、Blob、FormData、URLSearchParams 等
+    navigator.sendBeacon('/api/analytics', JSON.stringify(data));
+  }
+});
+</script>
+</div>
+
+<ul>
+  <li><code>sendBeacon</code> 总是发 <strong>POST</strong>，返回一个布尔值表示「是否成功排入发送队列」，之后没有任何回调，也拿不到响应。</li>
+  <li>数据量有上限（通常 64 KB），适合小体积的统计数据。可以先把用户操作攒在数组里，最后一次性发送。</li>
+  <li>为什么用 <code>visibilitychange</code> 而不是 <code>unload</code> / <code>beforeunload</code>？因为在手机上用户往往是直接划掉应用，<code>unload</code> 根本不会触发；<code>visibilitychange</code> 是页面生命周期中最后一个<strong>可靠</strong>触发的事件。</li>
+</ul>
+
+<div class="box new">
+  <div class="t">&#10024; 也可以用 <code>fetch(…, { keepalive: true })</code></div>
+  <p>
+    给 fetch 加上 <code>keepalive: true</code>，效果和 beacon 类似（页面卸载后请求继续），但你可以自定义方法和请求头。
+    请求体同样有约 64 KB 的限制。<span class="bl wide">Baseline 广泛可用</span>
+    Chromium 还在推进一个更进一步的 <code>fetchLater()</code> API：预先登记一个请求，由浏览器在页面销毁时（或到达指定时间时）自动发出，目前仅 Chromium 支持。<span class="bl limited">有限支持</span>
+  </p>
+</div>
+
+<h2 id="r4-6"><span class="rn">4.6</span>用 Server-Sent Events 接收服务器推送</h2>
+
+<p class="prob">你想接收服务器端的实时通知，又不想反复轮询。</p>
+
+<p>先看看三种「实时」方案的差别：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="轮询、SSE、WebSocket 三种通信模式的时序对比">
+  <text class="ttl" x="120" y="22" text-anchor="middle">短轮询</text>
+  <text class="ttl on-b" x="380" y="22" text-anchor="middle">Server-Sent Events</text>
+  <text class="ttl on-p" x="640" y="22" text-anchor="middle">WebSocket</text>
+  <text class="sm" x="60" y="42" text-anchor="middle">浏览器</text><text class="sm" x="180" y="42" text-anchor="middle">服务器</text>
+  <text class="sm" x="320" y="42" text-anchor="middle">浏览器</text><text class="sm" x="440" y="42" text-anchor="middle">服务器</text>
+  <text class="sm" x="580" y="42" text-anchor="middle">浏览器</text><text class="sm" x="700" y="42" text-anchor="middle">服务器</text>
+  <path class="ln-d" d="M60 50 V250 M180 50 V250 M320 50 V250 M440 50 V250 M580 50 V250 M700 50 V250"/>
+
+  <!-- 轮询 -->
+  <path class="ln" d="M60 64 L176 74" marker-end="url(#ar)"/><path class="ln" d="M180 80 L64 90" marker-end="url(#ar)"/>
+  <text class="sm" x="120" y="104" text-anchor="middle">「有新消息吗？」「没有」</text>
+  <path class="ln" d="M60 124 L176 134" marker-end="url(#ar)"/><path class="ln" d="M180 140 L64 150" marker-end="url(#ar)"/>
+  <path class="ln" d="M60 174 L176 184" marker-end="url(#ar)"/><path class="ln-a" d="M180 190 L64 200" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="120" y="220" text-anchor="middle">「有！」—— 但延迟 &amp; 大量空请求</text>
+
+  <!-- SSE -->
+  <path class="ln-b" d="M320 64 L436 74" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="380" y="62" text-anchor="middle">GET（只发一次）</text>
+  <rect class="bx-b" x="436" y="76" width="8" height="170" rx="3" style="opacity:.5"/>
+  <path class="ln-b" d="M440 100 L324 110" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M440 140 L324 150" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M440 190 L324 200" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="380" y="230" text-anchor="middle">连接保持打开，服务器随时推</text>
+
+  <!-- WS -->
+  <path class="ln-p" d="M580 64 L696 74" marker-end="url(#ar-p)"/>
+  <text class="sm on-p" x="640" y="62" text-anchor="middle">握手（Upgrade）</text>
+  <path class="ln-p" d="M700 100 L584 110" marker-end="url(#ar-p)"/>
+  <path class="ln-p" d="M580 130 L696 140" marker-end="url(#ar-p)"/>
+  <path class="ln-p" d="M700 160 L584 170" marker-end="url(#ar-p)"/>
+  <path class="ln-p" d="M580 190 L696 200" marker-end="url(#ar-p)"/>
+  <text class="sm on-p" x="640" y="230" text-anchor="middle">双方随时互发消息</text>
+</svg>
+<figcaption>图 4-7　短轮询、SSE 与 WebSocket</figcaption>
+</figure>
+
+<p>
+  SSE 基于普通的 HTTP：浏览器发一个 GET 请求，服务器<strong>不结束响应</strong>，而是保持连接，有事件时就往里写一段文本。
+  浏览器端的 API 叫 <code>EventSource</code>：
+</p>
+
+<div class="code" data-lang="js" data-file="4-08-server-sent-events.js">
+<script type="text/plain">
+const events = new EventSource('https://example.com/events');
+
+// 连接建立
+events.addEventListener('open', () => {
+  console.log('Connection is open');
+});
+
+// 连接出错（EventSource 会自动重连）
+events.addEventListener('error', event => {
+  console.log('An error occurred:', event);
+});
+
+// 收到类型为 heartbeat 的事件
+events.addEventListener('heartbeat', event => {
+  console.log('got heartbeat:', event.data);
+});
+
+// 收到类型为 notice 的事件
+events.addEventListener('notice', event => {
+  console.log('got notice:', event.data);
+});
+
+// 连接会一直保持，不需要时要手动关闭
+function cleanup() {
+  events.close();
+}
+</script>
+</div>
+
+<p>服务器返回的 <code>Content-Type</code> 必须是 <code>text/event-stream</code>，内容是一段段纯文本，每个事件以空行结束：</p>
+
+<div class="code" data-lang="text" data-file="服务器发送的数据流">
+<pre>
+event: notice
+data: Connection established at 10:51 PM, 2023-04-22
+id: 3
+
+event: heartbeat
+data: ping
+
+data: 没写 event 字段的消息，会触发通用的 message 事件
+</pre>
+</div>
+
+<dl class="terms">
+  <dt>event:</dt><dd>事件类型，对应 <code>addEventListener</code> 的第一个参数；省略时为 <code>message</code></dd>
+  <dt>data:</dt><dd>事件内容，前端从 <code>event.data</code> 读到（纯文本，JSON 需要自己 parse）</dd>
+  <dt>id:</dt><dd>事件编号。断线重连时浏览器会自动带上 <code>Last-Event-ID</code> 请求头，服务器可据此补发遗漏的事件</dd>
+  <dt>retry:</dt><dd>建议的重连间隔（毫秒）</dd>
+</dl>
+
+<div class="box warn">
+  <div class="t">&#9888; HTTP/1.1 下的连接数限制</div>
+  <p>
+    在 HTTP/1.1 下，浏览器对同一个域名最多同时维持 6 个连接，而且这是<strong>所有标签页共享</strong>的。
+    开 7 个带 SSE 的标签页，第 7 个就会卡住。使用 HTTP/2 或 HTTP/3（今天绝大多数 HTTPS 站点默认如此）就没有这个问题。
+  </p>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; AI 聊天的「打字机效果」用的是什么？</div>
+  <p>
+    大模型接口的流式输出通常就是 SSE 格式。但 <code>EventSource</code> 只能发 GET、不能自定义请求头（没法带 API 密钥或 POST 一段提示词），
+    所以实践中常用 <strong><code>fetch</code> + 读取 <code>response.body</code> 流</strong> 来手动解析：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const response = await fetch('/api/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ prompt: '你好' })
+});
+
+// response.body 是 ReadableStream；pipeThrough 把字节解码成文本
+const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  output.textContent += value;   // 每收到一块就追加显示
+}
+</script>
+  </div>
+</div>
+
+<h2 id="r4-7"><span class="rn">4.7</span>用 WebSocket 实时交换数据</h2>
+
+<p class="prob">你需要浏览器和服务器之间实时地<strong>双向</strong>收发数据。</p>
+
+<div class="code" data-lang="js" data-file="4-09-websockets.js">
+<script type="text/plain">
+// 打开 WebSocket 连接（URL 协议是 ws: 或 wss:）
+const socket = new WebSocket(url);
+
+socket.addEventListener('open', onSocketOpened);
+socket.addEventListener('message', handleMessage);
+socket.addEventListener('error', handleError);
+socket.addEventListener('close', onSocketClosed);
+
+function onSocketOpened() {
+  console.log('Socket ready for messages');
+}
+
+function handleMessage(event) {
+  console.log('Received message:', event.data);
+}
+
+function handleError(event) {
+  console.log('Socket error:', event);
+}
+
+function onSocketClosed() {
+  console.log('Connection was closed');
+}
+</script>
+</div>
+
+<p>收到 <code>open</code> 事件后就可以发消息了。消息是字符串（或二进制），对象要先 <code>JSON.stringify</code>：</p>
+
+<div class="code" data-lang="js" data-file="4-10-websocket-send.js">
+<script type="text/plain">
+socket.send('Hello');
+
+socket.send(JSON.stringify({
+  username: 'sysadmin',
+  password: 'password'
+}));
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="4-11-websocket-respond.js">
+<script type="text/plain">
+// 收到服务器消息后立即回复
+socket.addEventListener('message', event => {
+  socket.send('ACKNOWLEDGED');
+});
+
+// 用完关闭
+socket.close();
+</script>
+</div>
+
+<h3>握手：从 HTTP「升级」为 WebSocket</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="WebSocket 握手与双向数据帧">
+  <rect class="bx-b" x="40" y="14" width="160" height="34" rx="8"/><text class="lbl on-b" x="120" y="36" text-anchor="middle">浏览器</text>
+  <rect class="bx-g" x="560" y="14" width="160" height="34" rx="8"/><text class="lbl on-g" x="640" y="36" text-anchor="middle">服务器</text>
+  <path class="ln-d" d="M120 50 V280 M640 50 V280"/>
+
+  <path class="ln-b" d="M120 70 H636" marker-end="url(#ar-b)"/>
+  <text class="mono" x="380" y="88" text-anchor="middle">GET /websocket HTTP/1.1</text>
+  <text class="mono" x="380" y="104" text-anchor="middle">Connection: Upgrade   Upgrade: websocket</text>
+  <text class="mono" x="380" y="120" text-anchor="middle">Sec-WebSocket-Key: aSBjYW4gaGFz…</text>
+
+  <path class="ln-g" d="M640 138 H124" marker-end="url(#ar-g)"/>
+  <text class="mono on-g" x="380" y="156" text-anchor="middle">HTTP/1.1 101 Switching Protocols</text>
+  <text class="mono" x="380" y="172" text-anchor="middle">Sec-WebSocket-Accept: bm8gcGVla2…（由 Key 算出）</text>
+
+  <rect class="bx-p" x="130" y="188" width="500" height="26" rx="6"/>
+  <text class="sm on-p" x="380" y="206" text-anchor="middle">从此这条 TCP 连接不再说 HTTP，改说 WebSocket 协议 → 触发 open 事件</text>
+
+  <path class="ln-p" d="M120 230 H636" marker-end="url(#ar-p)"/>
+  <text class="sm on-p" x="380" y="226" text-anchor="middle">send('Hello')</text>
+  <path class="ln-p" d="M640 256 H124" marker-end="url(#ar-p)"/>
+  <text class="sm on-p" x="380" y="252" text-anchor="middle">message 事件</text>
+  <text class="sm" x="380" y="280" text-anchor="middle">任意一方调用 close() 结束</text>
+</svg>
+<figcaption>图 4-8　WebSocket 用一次 HTTP 请求「借道」建立连接</figcaption>
+</figure>
+
+<ul>
+  <li><code>ws://</code> 与 <code>wss://</code> 的关系，就像 <code>http://</code> 与 <code>https://</code>。HTTPS 页面上只能连 <code>wss://</code>。</li>
+  <li><code>socket.readyState</code> 表示连接状态：<code>0</code> 连接中、<code>1</code> 已打开、<code>2</code> 关闭中、<code>3</code> 已关闭。在 <code>open</code> 之前调用 <code>send</code> 会报错。</li>
+  <li>WebSocket <strong>不会自动重连</strong>（这点和 EventSource 不同）。断线重连、心跳保活需要自己实现，或者使用现成的库。</li>
+</ul>
+
+<div class="box new">
+  <div class="t">&#10024; 下一代：WebSocketStream 与 WebTransport</div>
+  <p>
+    <code>WebSocket</code> 有个缺陷：服务器发得太快时，消息会在内存里无限堆积（没有「背压」）。
+    <strong>WebSocketStream</strong> 用 Streams API 重新设计了它，目前仅 Chromium 支持 <span class="bl limited">有限支持</span>；
+    <strong>WebTransport</strong> 基于 HTTP/3，支持多路流和不可靠数据报，适合游戏和音视频，已在 Chrome 与 Firefox 中可用，Safari 仍在推进中。
+    对大多数应用而言，WebSocket 依然是最稳妥的选择。
+  </p>
+</div>
+
+<h2 id="modern">现代补充：超时、取消与下载进度</h2>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 1. 超时：5 秒没回来就放弃（第 1 章讲过 AbortSignal）
+try {
+  const res = await fetch('/api/slow', { signal: AbortSignal.timeout(5000) });
+} catch (e) {
+  if (e.name === 'TimeoutError') console.log('请求超时');
+}
+
+// 2. 搜索框：新的输入到来时取消上一个请求，避免旧结果覆盖新结果
+let controller;
+searchInput.addEventListener('input', async () => {
+  controller?.abort();
+  controller = new AbortController();
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(searchInput.value)}`,
+                            { signal: controller.signal });
+    render(await res.json());
+  } catch (e) {
+    if (e.name !== 'AbortError') throw e;
+  }
+});
+
+// 3. 下载进度：一边读流，一边累计字节数
+const res = await fetch('/big-file.zip');
+const total = Number(res.headers.get('Content-Length'));
+const reader = res.body.getReader();
+let received = 0;
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  received += value.length;
+  progress.value = received / total;
+}
+
+// 4. 优先级提示：告诉浏览器这个请求不那么急（Baseline 2024）
+fetch('/api/recommendations', { priority: 'low' });
+</script>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>XHR 是事件型的老 API，Fetch 是基于 Promise 的现代标准；只有需要上传进度时才考虑 XHR。</li>
+  <li><code>fetch</code> 只在网络失败时拒绝，<strong>一定要检查 <code>response.ok</code></strong>；响应体要再调 <code>json()</code> 等方法读取，且只能读一次。</li>
+  <li><code>body</code> 的类型决定 <code>Content-Type</code>：JSON 字符串要手动设置头，<code>FormData</code> 千万别手动设置。</li>
+  <li>CORS 由服务器的响应头决定，前端无法绕过。</li>
+  <li><code>sendBeacon</code>（或 <code>keepalive</code>）在 <code>visibilitychange</code> 时上报数据；注意数据必须先序列化。</li>
+  <li>单向推送用 SSE（自动重连），双向实时用 WebSocket（需自己处理重连）。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>封装一个 <code>request(url, options)</code> 函数：自动检查 <code>response.ok</code>、自动解析 JSON、默认 10 秒超时，出错时抛出带 <code>status</code> 属性的错误。</li>
+    <li>用 <a href="https://jsonplaceholder.typicode.com">JSONPlaceholder</a> 这类公开的测试接口，分别发一次 GET 和 POST，在开发者工具的「网络」面板里观察请求头和响应头。</li>
+    <li>写一个带实时搜索的输入框，用 <code>AbortController</code> 取消过期请求。在「网络」面板把速度调成「慢速 3G」，观察被取消的请求。</li>
+    <li>用 XHR 实现一个带上传进度条的文件上传（<code>xhr.upload.onprogress</code>）。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var out = document.getElementById('f-out');
+  async function run(url) {
+    out.textContent = 'fetch(' + JSON.stringify(url) + ') …\n';
+    try {
+      var res = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined });
+      out.textContent += 'Promise 兑现了 ✓\n' +
+        'status     = ' + res.status + ' ' + res.statusText + '\n' +
+        'ok         = ' + res.ok + '\n' +
+        'Content-Type = ' + res.headers.get('Content-Type') + '\n';
+      if (!res.ok) out.textContent += '\n→ 注意：404 并没有让 Promise 拒绝，需要检查 response.ok';
+      else {
+        var text = await res.text();
+        out.textContent += '\n响应体前 120 个字符：\n' + text.slice(0, 120) + '…';
+      }
+    } catch (e) {
+      out.textContent += 'Promise 拒绝了 ✗\n' + e.name + ': ' + e.message +
+        '\n\n→ 只有「没拿到响应」（网络错误、CORS、超时）才会走到 catch';
+    }
+  }
+  document.getElementById('f-ok').onclick = function () { run('assets/site.js'); };
+  document.getElementById('f-404').onclick = function () { run('nope.json'); };
+  document.getElementById('f-bad').onclick = function () { run('https://does-not-exist.invalid/'); };
+})();
+</script>
+</body>
+</html>

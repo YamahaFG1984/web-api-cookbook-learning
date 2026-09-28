@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 19 章 · 结语 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="19">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 19 章</span>
+<h1>结语：与不断变化的 Web 平台相处</h1>
+<p class="lede">
+  走到这里，你已经见识了浏览器内置的几十个 API：从 Promise 到 IndexedDB，从观察者到 Web Components，从剪贴板到摄像头。
+  最后一章不讲新的 API，而是讲几条「元知识」：什么时候还是该用库、如何判断一个 API 能不能用、如何为旧浏览器兜底，以及未来还有什么值得期待。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>在「原生 API」与「第三方库」之间做出合理的取舍</li>
+    <li>掌握特性检测，避免浏览器版本嗅探</li>
+    <li>理解 polyfill 的作用与局限（以及它的安全风险）</li>
+    <li>了解 Web 标准从提案到 Baseline 的过程，以及正在到来的新 API</li>
+    <li>用一张表回顾全书涉及的 API 在 2026 年的支持情况</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="r19-1"><span class="rn">19.1</span>为第三方库说句公道话</h2>
+
+<p>
+  本书反复强调「不用库也能做到」，但这不意味着要不惜一切代价避免依赖。原生 API 往往只提供最底层的能力，
+  你可能需要写不少「胶水代码」才能把它变成顺手的工具。IndexedDB 就是典型：功能强大，但回调式的 API 用起来很痛苦（第 5 章），
+  所以才有 <code>idb</code>、Dexie.js 这样的封装库。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="使用原生 API 与第三方库的权衡">
+  <path class="ln" d="M380 40 V200" style="stroke-width:3"/>
+  <polygon points="360,200 400,200 380,176" style="fill:var(--line-2)"/>
+  <path class="ln" d="M120 80 L640 60" style="stroke-width:4"/>
+  <rect class="bx-g" x="60" y="92" width="240" height="96" rx="10"/>
+  <text class="ttl on-g" x="180" y="116" text-anchor="middle">原生 API</text>
+  <text class="sm" x="180" y="138" text-anchor="middle">✓ 零体积、零依赖、由浏览器维护</text>
+  <text class="sm" x="180" y="156" text-anchor="middle">✓ 性能通常最好</text>
+  <text class="sm" x="180" y="174" text-anchor="middle">✗ 可能繁琐，需要自己写封装</text>
+  <rect class="bx-b" x="460" y="72" width="240" height="96" rx="10"/>
+  <text class="ttl on-b" x="580" y="96" text-anchor="middle">第三方库</text>
+  <text class="sm" x="580" y="118" text-anchor="middle">✓ 开发体验好，处理了边界情况</text>
+  <text class="sm" x="580" y="136" text-anchor="middle">✗ 增加下载体积、可能停止维护</text>
+  <text class="sm" x="580" y="154" text-anchor="middle">✗ 供应链风险</text>
+  <text class="sm" x="380" y="222" text-anchor="middle">没有标准答案：看团队、看场景、看包体积预算</text>
+</svg>
+<figcaption>图 19-1　一切都是权衡</figcaption>
+</figure>
+
+<div class="box tip">
+  <div class="t">&#128161; 一个实用的判断顺序</div>
+  <ol>
+    <li>HTML / CSS 能直接做到吗？（<code>loading="lazy"</code>、<code>&lt;details&gt;</code>、<code>popover</code>、容器查询、<code>@starting-style</code>……）</li>
+    <li>原生 JS API 加少量封装能做到吗？（本书的大部分配方）</li>
+    <li>有没有「薄」的库，只是把原生 API 包得更好用？（<code>idb</code>、<code>web-vitals</code>）</li>
+    <li>最后才考虑「厚」的、自带一整套实现的库。</li>
+  </ol>
+</div>
+
+<h2 id="r19-2"><span class="rn">19.2</span>检测特性，而不是浏览器版本</h2>
+
+<p>
+  想判断用户的浏览器是否支持某个 API，你可能会想去解析 <code>navigator.userAgent</code>，看看是哪个浏览器的哪个版本。<strong>请不要这样做</strong>：
+  UA 字符串极不可靠（各家浏览器都在里面互相「冒充」），用户也可以随意伪装；更重要的是，浏览器会不断更新，你写死的版本表很快就会过时。
+  正确的做法是直接检测<strong>你需要的那个特性</strong>是否存在：
+</p>
+
+<div class="code" data-lang="js" data-file="19-01（检测 IndexedDB）">
+<script type="text/plain">
+if ('indexedDB' in window) {
+  // 支持 IndexedDB！
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="UA 嗅探与特性检测的对比">
+  <rect class="bx-r" x="20" y="20" width="350" height="160" rx="12"/>
+  <text class="ttl on-r" x="195" y="44" text-anchor="middle">✗ UA 嗅探</text>
+  <text class="mono" x="36" y="72" style="font-size:11px">if (/Chrome\/(\d+)/.exec(ua)?.[1] &gt;= 115)</text>
+  <text class="sm" x="36" y="98">· Edge、Opera、三星浏览器的 UA 里都有 "Chrome"</text>
+  <text class="sm" x="36" y="118">· iOS 上的 Chrome 其实是 Safari 内核</text>
+  <text class="sm" x="36" y="138">· 用户或插件可以任意修改 UA</text>
+  <text class="sm" x="36" y="158">· 浏览器更新后，版本表就过时了</text>
+
+  <rect class="bx-g" x="390" y="20" width="350" height="160" rx="12"/>
+  <text class="ttl on-g" x="565" y="44" text-anchor="middle">✓ 特性检测</text>
+  <text class="mono" x="406" y="72" style="font-size:11px">if ('ScrollTimeline' in window)</text>
+  <text class="sm" x="406" y="98">· 直接问「你会不会这个」</text>
+  <text class="sm" x="406" y="118">· 任何浏览器实现了就能自动用上</text>
+  <text class="sm" x="406" y="138">· 不认识的新浏览器也能正确处理</text>
+  <text class="sm" x="406" y="158">· 配合降级方案 = 渐进增强</text>
+</svg>
+<figcaption>图 19-2　问「你能做什么」，而不是问「你是谁」</figcaption>
+</figure>
+
+<p>本书中出现过的各种特性检测写法：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+'getBattery' in navigator                     // 对象上的方法 / 属性（第 14 章）
+typeof URLPattern !== 'undefined'             // 全局构造函数（第 3 章）
+'highlights' in CSS                           // CSS 相关 API（第 17 章）
+CSS.supports('anchor-name: --x')              // CSS 属性和值（第 13 章）
+CSS.supports('selector(:user-invalid)')       // CSS 选择器（第 7 章）
+MediaRecorder.isTypeSupported('video/webm')   // 某个格式（第 18 章）
+PerformanceObserver.supportedEntryTypes       // 支持的条目类型（第 15 章）
+HTMLScriptElement.supports?.('importmap')     // <script> 支持的 type
+
+// CSS 里也可以做特性检测
+// @supports (anchor-name: --x) { … }
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 「存在」不等于「能用」</div>
+  <p>
+    有些 API 在浏览器里存在，但因为缺少硬件（振动）、缺少权限（定位）、不在安全上下文（剪贴板）或被用户禁用（localStorage）而无法使用。
+    所以除了特性检测，调用时仍然要处理 Promise 的拒绝或 try/catch 抛出的异常 —— 这也是本书每一章都在强调错误处理的原因。
+  </p>
+</div>
+
+<h2 id="r19-3"><span class="rn">19.3</span>Polyfill</h2>
+
+<p>
+  需要支持旧浏览器时，可以借助 <strong>polyfill</strong>：一段用 JavaScript 实现缺失功能的第三方代码，让旧浏览器「假装」原生支持新 API。
+  它通常不如原生实现快，但能让你今天就用上新 API 的写法。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="polyfill 的工作方式与局限">
+  <rect class="bx" x="20" y="40" width="200" height="60" rx="10"/>
+  <text class="mono" x="120" y="66" text-anchor="middle">if (!('X' in window))</text>
+  <text class="sm" x="120" y="86" text-anchor="middle">浏览器缺少 X</text>
+  <path class="ln" d="M222 70 H276" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="280" y="40" width="200" height="60" rx="10"/>
+  <text class="lbl on-a" x="380" y="66" text-anchor="middle">加载 polyfill</text>
+  <text class="sm" x="380" y="86" text-anchor="middle">用 JS 实现一个 window.X</text>
+  <path class="ln" d="M482 70 H536" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="540" y="40" width="200" height="60" rx="10"/>
+  <text class="lbl on-g" x="640" y="66" text-anchor="middle">业务代码照常调用 X</text>
+  <text class="sm" x="640" y="86" text-anchor="middle">不必关心是不是原生的</text>
+
+  <rect class="bx-g" x="20" y="126" width="350" height="56" rx="10"/>
+  <text class="sm on-g" x="36" y="148">✓ 能 polyfill：纯计算逻辑的 API</text>
+  <text class="sm" x="36" y="168">URLPattern、Temporal、Promise.withResolvers …</text>
+  <rect class="bx-r" x="390" y="126" width="350" height="56" rx="10"/>
+  <text class="sm on-r" x="406" y="148">✗ 不能 polyfill：依赖系统 / 硬件能力的 API</text>
+  <text class="sm" x="406" y="168">定位、蓝牙、振动、摄像头、系统通知 …</text>
+</svg>
+<figcaption>图 19-3　polyfill 能补上「逻辑」，补不了「能力」</figcaption>
+</figure>
+
+<div class="box warn">
+  <div class="t">&#9888; polyfill 也是供应链风险</div>
+  <p>
+    2024 年，曾被数十万网站引用的 <code>polyfill.io</code> 域名易主后，被用来向访问者注入恶意代码 —— 这是近年影响最广的前端供应链事件之一。
+    教训：从第三方域名直接加载脚本，等于把你网站的控制权交给了对方。polyfill 应该通过包管理器安装、随项目一起构建和部署（自托管），并且只在需要时加载。
+  </p>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 构建工具可以帮你</div>
+  <p>
+    如果项目使用 Babel、Vite 等构建工具，可以用 <code>browserslist</code> 声明要支持的浏览器范围（例如 <code>baseline widely available</code>），
+    工具会据此自动转换语法、按需注入 core-js 等 polyfill，你不必手动判断每一个 API。
+  </p>
+</div>
+
+<h2 id="r19-4"><span class="rn">19.4</span>展望未来</h2>
+
+<p>Web 平台在持续扩展。一个 API 从提出到你可以放心使用，大致要经历这样的过程：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="Web API 从提案到广泛可用的生命周期">
+  <path class="ln" d="M20 110 H740" marker-end="url(#ar)"/>
+  <rect class="bx" x="20" y="60" width="120" height="100" rx="10"/>
+  <text class="lbl" x="80" y="86" text-anchor="middle">① 提案</text>
+  <text class="sm" x="80" y="108" text-anchor="middle">WICG / TC39</text>
+  <text class="sm" x="80" y="124" text-anchor="middle">讨论需求与设计</text>
+  <rect class="bx-p" x="160" y="60" width="130" height="100" rx="10"/>
+  <text class="lbl on-p" x="225" y="86" text-anchor="middle">② 实验</text>
+  <text class="sm" x="225" y="108" text-anchor="middle">浏览器开关 flag</text>
+  <text class="sm" x="225" y="124" text-anchor="middle">Origin Trial 试用</text>
+  <rect class="bx-a" x="310" y="60" width="130" height="100" rx="10"/>
+  <text class="lbl on-a" x="375" y="86" text-anchor="middle">③ 首个发布</text>
+  <text class="sm" x="375" y="108" text-anchor="middle">一个引擎正式支持</text>
+  <text class="sm" x="375" y="124" text-anchor="middle"><tspan class="on-a">有限支持</tspan></text>
+  <rect class="bx-b" x="460" y="60" width="130" height="100" rx="10"/>
+  <text class="lbl on-b" x="525" y="86" text-anchor="middle">④ 新近可用</text>
+  <text class="sm" x="525" y="108" text-anchor="middle">四大浏览器最新版</text>
+  <text class="sm" x="525" y="124" text-anchor="middle">全部支持</text>
+  <rect class="bx-g" x="610" y="60" width="130" height="100" rx="10"/>
+  <text class="lbl on-g" x="675" y="86" text-anchor="middle">⑤ 广泛可用</text>
+  <text class="sm" x="675" y="108" text-anchor="middle">新近可用后</text>
+  <text class="sm" x="675" y="124" text-anchor="middle">再过 30 个月</text>
+  <text class="sm" x="80" y="186" text-anchor="middle">可能停在这里</text>
+  <text class="sm" x="525" y="186" text-anchor="middle">Baseline 20xx</text>
+  <text class="sm" x="675" y="186" text-anchor="middle">大多数项目可放心使用</text>
+  <text class="sm" x="380" y="30" text-anchor="middle">Interop 年度计划：各浏览器厂商每年共同挑选一批特性，集中修复不一致之处</text>
+</svg>
+<figcaption>图 19-4　从提案到 Baseline 广泛可用</figcaption>
+</figure>
+
+<p>原书在结尾介绍了几个「即将到来」的 API。两年过去，它们的状况如下：</p>
+
+<div class="tw">
+<table>
+  <tr><th>API</th><th>用途</th><th>2026 年的状况</th></tr>
+  <tr><td>Web Bluetooth</td><td>通过 GATT 协议连接蓝牙设备（读电量、接收通知）</td><td><span class="bl limited">仅 Chromium</span> Firefox 与 Safari 出于隐私与安全考虑表示不打算实现</td></tr>
+  <tr><td>Web NFC</td><td>用 NDEF 格式读写 NFC 标签</td><td><span class="bl limited">仅 Android 版 Chrome</span></td></tr>
+  <tr><td>EyeDropper</td><td>从屏幕任意位置（包括浏览器外）取色</td><td><span class="bl limited">仅桌面版 Chromium</span></td></tr>
+  <tr><td>Barcode Detection</td><td>从图片、视频、画布中识别条形码和二维码</td><td><span class="bl limited">部分平台的 Chromium</span> 可用 ZXing 等库或 WebAssembly 兜底</td></tr>
+  <tr><td>Cookie Store API</td><td>异步读写 Cookie，并监听变化，替代难用的 <code>document.cookie</code></td><td><span class="bl newly">Baseline 2025</span> 已在三大引擎中可用</td></tr>
+  <tr><td>Payment Request</td><td>调起浏览器 / 系统的原生支付界面</td><td><span class="bl limited">Chromium 与 Safari（Apple Pay）</span> Firefox 未实现</td></tr>
+</table>
+</div>
+
+<div class="code" data-lang="js" data-file="几个未来 API 的样子">
+<script type="text/plain">
+// Cookie Store API：再也不用手动解析 document.cookie 字符串
+const cookie = await cookieStore.get('session');
+await cookieStore.set({ name: 'theme', value: 'dark', expires: Date.now() + 86400e3 });
+cookieStore.addEventListener('change', e => console.log(e.changed, e.deleted));
+
+// EyeDropper：取色器
+if ('EyeDropper' in window) {
+  const { sRGBHex } = await new EyeDropper().open();   // 必须在用户点击中调用
+}
+
+// Barcode Detection：识别二维码
+if ('BarcodeDetector' in window) {
+  const detector = new BarcodeDetector({ formats: ['qr_code'] });
+  const [code] = await detector.detect(videoElement);
+  console.log(code?.rawValue);
+}
+</script>
+</div>
+
+<h3>2026 年值得关注的方向</h3>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#129302;</span><h4>浏览器内置 AI</h4><p>Chrome 已发布翻译（Translator）、语言检测、摘要（Summarizer）等基于本地模型的 API，更多提案仍在推进中。<span class="bl limited">有限支持</span></p></div>
+  <div class="card"><span class="ic">&#127918;</span><h4>WebGPU</h4><p>新一代 GPU 接口，用于 3D 渲染和通用计算（包括在浏览器里运行机器学习模型）。三大引擎均已在部分平台发布。</p></div>
+  <div class="card"><span class="ic">&#128640;</span><h4>更少 JS 的交互</h4><p>Popover、Invoker Commands、锚点定位、滚动驱动动画、跨文档视图过渡：越来越多的交互可以只用 HTML 和 CSS 完成。</p></div>
+  <div class="card"><span class="ic">&#128241;</span><h4>更像 App 的 Web</h4><p>PWA 安装、推送通知、文件处理、后台同步……Web 应用与原生应用的界限持续模糊。</p></div>
+</div>
+
+<h3>去哪里追踪最新进展</h3>
+
+<ul>
+  <li><a href="https://developer.mozilla.org/zh-CN/docs/Web/API">MDN Web API 索引</a>：所有 API 的文档与兼容性表，实验性 API 会有明确标记。</li>
+  <li><a href="https://caniuse.com">Can I use</a>：按功能查询各浏览器、各版本的支持情况，现在也显示 Baseline 状态。</li>
+  <li><a href="https://webstatus.dev">webstatus.dev</a>：官方的 Baseline 数据看板，可以查看每个特性何时成为 Baseline。</li>
+  <li><a href="https://web.dev/blog">web.dev 博客</a> 与各浏览器的发布说明（Chrome、Firefox、Safari Technology Preview）。</li>
+  <li><a href="https://www.w3.org/TR/">W3C 标准与草案</a>、<a href="https://spec.whatwg.org">WHATWG 规范</a>、<a href="https://github.com/tc39/proposals">TC39 提案</a>：最权威但也最枯燥的来源，遇到边界情况时查阅。</li>
+</ul>
+
+<h2 id="review">全书 API 支持情况总览（2026）</h2>
+
+<p>下表汇总了本书主要 API 当前的支持状态，方便你在项目中快速决策。数据会随浏览器更新而变化，上线前请以 caniuse / MDN 为准。</p>
+
+<div class="tw">
+<table>
+  <tr><th>章</th><th>API</th><th>状态</th><th>降级建议</th></tr>
+  <tr><td>1</td><td>Promise、async/await、<code>requestAnimationFrame</code>、<code>AbortSignal.timeout</code></td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>1</td><td><code>Promise.withResolvers</code>、<code>AbortSignal.any</code></td><td><span class="bl newly">Baseline 2024</span></td><td>几行代码即可自行实现</td></tr>
+  <tr><td>2</td><td>Web Storage、<code>storage</code> 事件、BroadcastChannel</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>3</td><td>URL、URLSearchParams、History API</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>3</td><td>URLPattern</td><td><span class="bl newly">Baseline 2025</span></td><td>urlpattern-polyfill</td></tr>
+  <tr><td>3</td><td>Navigation API</td><td><span class="bl newly">Baseline 2026</span></td><td>保留 History API 方案</td></tr>
+  <tr><td>4</td><td>Fetch、Beacon、SSE、WebSocket</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>5</td><td>IndexedDB</td><td><span class="bl wide">广泛可用</span></td><td>用 idb 简化</td></tr>
+  <tr><td>6</td><td>Intersection / Mutation / Resize Observer、<code>loading="lazy"</code></td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>7</td><td>FormData、约束校验 API</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>7</td><td><code>:user-invalid</code>、FormData submitter</td><td><span class="bl newly">Baseline 2023</span></td><td>JS 标记「已触碰」</td></tr>
+  <tr><td>8</td><td>Web Animations API（含 <code>composite</code>）</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>8</td><td>ScrollTimeline / 滚动驱动动画</td><td><span class="bl limited">有限支持</span></td><td>scroll 事件 / 不做动画</td></tr>
+  <tr><td>9</td><td>语音合成</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>9</td><td>语音识别</td><td><span class="bl limited">有限支持</span></td><td>隐藏语音输入入口 / 云端识别服务</td></tr>
+  <tr><td>10</td><td>File、FileReader、Blob、拖放、<code>&lt;a download&gt;</code></td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>10</td><td>File System Access（文件选择器与写入）</td><td><span class="bl limited">仅 Chromium</span></td><td>下载链接</td></tr>
+  <tr><td>11</td><td>Intl（DateTimeFormat、NumberFormat、PluralRules、ListFormat、Collator 等）</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>11</td><td>Intl.Segmenter / DurationFormat</td><td><span class="bl newly">Baseline 2024 / 2025</span></td><td>—</td></tr>
+  <tr><td>11</td><td>Temporal</td><td><span class="bl limited">有限支持</span></td><td>@js-temporal/polyfill</td></tr>
+  <tr><td>12</td><td>Custom Elements、Shadow DOM、template/slot</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>12</td><td>声明式 Shadow DOM、<code>:state()</code></td><td><span class="bl newly">Baseline 2024</span></td><td>—</td></tr>
+  <tr><td>13</td><td><code>&lt;dialog&gt;</code>、<code>&lt;details&gt;</code>、Notification</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>13</td><td>Popover API</td><td><span class="bl newly">Baseline 2024</span></td><td>—</td></tr>
+  <tr><td>13</td><td>CSS 锚点定位</td><td><span class="bl limited">有限支持</span></td><td>JS 计算位置 / Floating UI</td></tr>
+  <tr><td>14</td><td>Geolocation、Clipboard（写）、<code>screen.orientation</code></td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>14</td><td>Battery、Network Information、Vibration、Web Share（桌面）</td><td><span class="bl limited">有限支持</span></td><td>只作增强，功能不依赖它们</td></tr>
+  <tr><td>15</td><td>Navigation / Resource / User Timing、PerformanceObserver</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>16</td><td>console 各方法</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>17</td><td>Font Loading、CSSOM、matchMedia、getComputedStyle</td><td><span class="bl wide">广泛可用</span></td><td>—</td></tr>
+  <tr><td>17</td><td>CSS Custom Highlight、同文档 View Transitions</td><td><span class="bl newly">Baseline 2025</span></td><td>不做高亮 / 直接切换</td></tr>
+  <tr><td>18</td><td>getUserMedia、getDisplayMedia（桌面）、MediaRecorder、Media Capabilities</td><td><span class="bl wide">广泛可用</span></td><td>MediaRecorder 注意选择格式</td></tr>
+</table>
+</div>
+
+<h2 id="summary">写在最后</h2>
+
+<p>
+  浏览器早已不是「显示文档的软件」，而是一个功能完备的应用平台。本书的每一个配方都在说明同一件事：
+  <strong>在引入依赖之前，先看看浏览器自己能做什么</strong>。同时也请记住本书反复出现的几条原则：
+</p>
+
+<ul>
+  <li><strong>先检测，再使用</strong>：特性检测 + 降级方案，而不是假设所有人都用最新的 Chrome。</li>
+  <li><strong>永远处理错误</strong>：Promise 可能被拒绝，权限可能被拒绝，网络可能断开。</li>
+  <li><strong>尊重用户</strong>：隐私（定位、摄像头、剪贴板）要先征得同意，动画要尊重 <code>prefers-reduced-motion</code>，交互要考虑键盘和屏幕阅读器用户。</li>
+  <li><strong>保持好奇</strong>：Web 平台每个月都在变化。你今天用 20 行 JS 实现的功能，明年可能一个 HTML 属性就能搞定。</li>
+</ul>
+
+<div class="exercise">
+  <h3>毕业练习</h3>
+  <ol>
+    <li>挑一个你熟悉的项目，列出它依赖的第三方库，逐一判断：哪些可以用本书的原生 API 替代？替代后能减少多少体积？</li>
+    <li>综合运用本书知识，做一个离线可用的「笔记应用」：IndexedDB 存储（第 5 章）、表单校验（第 7 章）、Web Components（第 12 章）、导出文件（第 10 章）、国际化日期（第 11 章）、对话框确认删除（第 13 章），并为每个非 Baseline 特性写好降级方案。</li>
+    <li>去 <a href="https://webstatus.dev">webstatus.dev</a> 找一个最近刚成为 Baseline 的特性，写一个小演示页面分享给同事。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

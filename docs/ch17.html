@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 17 章 · CSS 相关 API — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  ::highlight(search-hit) { background-color: #fde68a; color: #1f1300; }
+  ::highlight(highlight-range) { background-color: #fef3c7; color: #1f1300; }
+  .vt-card { border: 1px solid var(--line-2); border-radius: 10px; padding: 14px 16px; margin-top: 10px; background: var(--panel-2); }
+  .vt-card h4 { margin: 0 0 4px; color: var(--fg); }
+  #vt-stage { view-transition-name: vt-stage; }
+  ::view-transition-old(vt-stage), ::view-transition-new(vt-stage) { animation-duration: .6s; }
+  .cs-demo #cs-content { background-color: blue; }
+  .cs-demo .cs-container { background-color: red; color: white; padding: 8px 12px; border-radius: 6px; }
+</style>
+</head>
+<body data-chapter="17">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 17 章</span>
+<h1>CSS 相关 API</h1>
+<p class="lede">
+  CSS 不只是写在样式表里的规则。浏览器还开放了一组 API，让 JavaScript 能够：给任意文字范围加高亮而不改动 DOM、
+  掌控字体何时加载完成、给页面切换加上动画、在运行时修改样式表、查询媒体条件，以及读取元素最终生效的样式。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>用 <code>Range</code> + CSS Custom Highlight API 高亮文字</li>
+    <li>用 CSS Font Loading API 控制 Web 字体的加载时机</li>
+    <li>用 View Transitions API 给 DOM 变化加过渡动画</li>
+    <li>在运行时插入 CSS 规则、按条件切换 class、响应媒体查询变化</li>
+    <li>分清 <code>element.style</code> 与 <code>getComputedStyle</code></li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="r17-1"><span class="rn">17.1</span>高亮文字范围</h2>
+
+<p class="prob">你想给文档中的一段文字加上高亮效果（比如搜索结果、批注），但不想修改 DOM 结构。</p>
+
+<h3>第一步：用 Range 圈出文字</h3>
+
+<p><code>Range</code> 表示文档中的一段连续内容，由「起点」和「终点」组成，每个点是「某个节点 + 偏移量」：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="Range 由文本节点中的起止偏移量定义">
+  <text class="sm" x="20" y="24">文本节点 textNode.textContent：</text>
+  <g class="mono" style="font-size:14px">
+    <rect class="bx" x="20" y="36" width="330" height="32" rx="4"/>
+    <text x="30" y="57">This is some text. We're using the </text>
+    <rect class="bx-a" x="350" y="36" width="240" height="32" rx="4"/>
+    <text class="on-a" x="360" y="57">highlight some of the</text>
+    <rect class="bx" x="590" y="36" width="60" height="32" rx="4"/>
+    <text x="600" y="57">text.</text>
+  </g>
+  <path class="ln-a" d="M350 72 V96"/><text class="mono on-a" x="350" y="112" text-anchor="middle">setStart(textNode, startOffset)</text>
+  <path class="ln-a" d="M590 72 V126"/><text class="mono on-a" x="590" y="142" text-anchor="middle">setEnd(textNode, endOffset)</text>
+  <text class="sm" x="20" y="164">startOffset = textContent.indexOf(要高亮的文字)；endOffset = startOffset + 文字长度</text>
+</svg>
+<figcaption>图 17-1　Range = 起点 + 终点，每个点都是「节点 + 偏移量」</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="17-01-create-range.js">
+<script type="text/plain">
+/**
+ * 给定一个文本节点和要高亮的子字符串，创建覆盖这段文字的 Range
+ */
+function getRange(textNode, textToHighlight) {
+  const startOffset = textNode.textContent.indexOf(textToHighlight);
+  const endOffset = startOffset + textToHighlight.length;
+
+  // 创建 Range 并设置起止位置
+  const range = new Range();
+  range.setStart(textNode, startOffset);
+  range.setEnd(textNode, endOffset);
+
+  return range;
+}
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 找不到时 indexOf 返回 -1</div>
+  <p>如果文字不存在，<code>setStart(textNode, -1)</code> 会抛出 <code>IndexSizeError</code>。实际使用时先判断 <code>startOffset === -1</code>。</p>
+</div>
+
+<div class="code" data-lang="html" data-file="17-02-markup.html">
+<script type="text/plain">
+<p id="text">
+  This is some text. We're using the CSS Custom Highlight API to highlight some of
+  the text.
+</p>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="17-03-use-getRange.js">
+<script type="text/plain">
+const node = document.querySelector('#text');
+// <p> 的第一个子节点就是里面的文本节点
+const range = getRange(node.firstChild, 'highlight some of the text');
+</script>
+</div>
+
+<h3>第二步：注册高亮，第三步：写样式</h3>
+
+<div class="code" data-lang="js" data-file="17-04-register-highlight.js">
+<script type="text/plain">
+const highlight = new Highlight(range);           // 一个 Highlight 可以包含多个 Range
+CSS.highlights.set('highlight-range', highlight); // 以名字注册到全局的高亮注册表
+</script>
+</div>
+
+<div class="code" data-lang="css" data-file="17-05-style-highlight.css">
+<script type="text/plain">
+::highlight(highlight-range) {
+  background-color: #fef3c7;   /* 浅琥珀色 */
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="Range、Highlight、注册表与 ::highlight 的关系">
+  <rect class="bx-a" x="20" y="40" width="130" height="60" rx="10"/>
+  <text class="mono on-a" x="85" y="66" text-anchor="middle">Range</text>
+  <text class="sm" x="85" y="86" text-anchor="middle">圈出哪些文字</text>
+  <path class="ln" d="M152 70 H196" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="200" y="40" width="150" height="60" rx="10"/>
+  <text class="mono on-b" x="275" y="66" text-anchor="middle">new Highlight(…)</text>
+  <text class="sm" x="275" y="86" text-anchor="middle">一组 Range</text>
+  <path class="ln" d="M352 70 H396" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="400" y="40" width="160" height="60" rx="10"/>
+  <text class="mono on-p" x="480" y="66" text-anchor="middle">CSS.highlights</text>
+  <text class="mono on-p" x="480" y="86" text-anchor="middle">.set('名字', h)</text>
+  <path class="ln" d="M562 70 H606" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="610" y="40" width="130" height="60" rx="10"/>
+  <text class="mono on-g" x="675" y="66" text-anchor="middle">::highlight(名字)</text>
+  <text class="sm" x="675" y="86" text-anchor="middle">CSS 决定样子</text>
+  <text class="sm" x="380" y="134" text-anchor="middle">整个过程不插入、不修改任何 DOM 节点 —— 只是告诉浏览器「画的时候把这段染个色」</text>
+</svg>
+<figcaption>图 17-2　Custom Highlight API 的三步：圈范围 → 注册 → 写样式</figcaption>
+</figure>
+
+<h3>和 &lt;mark&gt; 有什么区别？</h3>
+
+<div class="code" data-lang="html" data-file="17-06-mark-element.html">
+<script type="text/plain">
+<p id="text">
+  This is some text. We're using the mark element to
+  <mark>highlight some of the text</mark>.
+</p>
+</script>
+</div>
+
+<p>
+  视觉效果一样，但 <code>&lt;mark&gt;</code> 要往 DOM 里插入新元素。当要高亮的文字<strong>跨越多个元素</strong>时，就没法用一个 <code>&lt;mark&gt;</code> 包住了：
+</p>
+
+<div class="code" data-lang="html" data-file="17-07 / 17-08（无效的 HTML）">
+<script type="text/plain">
+<p>
+  This is a paragraph, <mark>which is being highlighted.
+</p>
+<p>
+  The highlight extends to this paragraph</mark>. This is not highlighted.
+</p>
+<!-- 标签交叉嵌套，这是无效的 HTML -->
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="Range 可以跨越多个元素">
+  <rect class="bx" x="20" y="20" width="460" height="40" rx="6"/>
+  <text class="sm" x="30" y="45">&lt;p&gt; This is a paragraph, </text>
+  <rect x="196" y="30" width="170" height="22" rx="3" style="fill:#fef3c7"/>
+  <text class="sm" x="200" y="45" style="fill:#1f1300">which is being highlighted.</text>
+  <text class="sm" x="372" y="45">&lt;/p&gt;</text>
+  <rect class="bx" x="20" y="70" width="460" height="40" rx="6"/>
+  <text class="sm" x="30" y="95">&lt;p&gt;</text>
+  <rect x="58" y="80" width="250" height="22" rx="3" style="fill:#fef3c7"/>
+  <text class="sm" x="62" y="95" style="fill:#1f1300">The highlight extends to this paragraph</text>
+  <text class="sm" x="312" y="95">. This is not highlighted. &lt;/p&gt;</text>
+  <path class="ln-a" d="M196 30 V14 H530"/>
+  <path class="ln-a" d="M308 110 V126 H530"/>
+  <text class="mono on-a" x="540" y="18">range.setStart(第一段文本, …)</text>
+  <text class="mono on-a" x="540" y="130">range.setEnd(第二段文本, …)</text>
+  <text class="sm on-g" x="540" y="66">✓ 一个 Range 跨两个 &lt;p&gt;</text>
+  <text class="sm on-g" x="540" y="84">  连续高亮，DOM 原封不动</text>
+  <text class="sm" x="20" y="156">另一个好处：高亮不影响 DOM，所以不会打断框架（React/Vue）对 DOM 的管理，也不会影响文本选择和复制</text>
+</svg>
+<figcaption>图 17-3　一个 Range 可以从一个元素的中间跨到另一个元素的中间</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：用 Custom Highlight API 实现「页内搜索高亮」</div>
+  <div class="b">
+    <div class="row"><input id="hl-q" value="Range" placeholder="输入要高亮的词"><span class="hint" id="hl-n"></span></div>
+    <div id="hl-text" style="margin-top:8px;font-size:15px">
+      <p style="margin:6px 0">A Range represents a fragment of a document. The CSS Custom Highlight API lets you style any Range without touching the DOM.</p>
+      <p style="margin:6px 0">这一段是中文。Range 可以跨越多个元素，高亮不会插入任何 mark 标签。试着搜索「高亮」或者 the。</p>
+    </div>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 支持现状</div>
+  <p>
+    书写作时 Firefox 尚不支持这个 API；2025 年 Firefox 140 加入支持后，它已成为 <span class="bl newly">Baseline 2025</span>。
+    使用前可以检测 <code>if ('highlights' in CSS)</code>。常见用途：搜索高亮、代码编辑器的语法着色、拼写检查的波浪线、协作编辑中他人的选区。
+  </p>
+</div>
+
+<h2 id="r17-2"><span class="rn">17.2</span>避免字体加载时的闪烁</h2>
+
+<p class="prob">使用 Web 字体时，文字会先用系统字体显示，字体下载完又突然变样（称为 FOUT，Flash Of Unstyled Text）。你想避免这种闪烁。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="字体加载过程中文字的三种显示策略">
+  <path class="ln" d="M150 30 H740" marker-end="url(#ar)"/>
+  <text class="sm" x="740" y="22" text-anchor="end">时间 →</text>
+  <path class="ln-d" d="M480 26 V180"/>
+  <text class="sm on-g" x="480" y="22" text-anchor="middle">字体下载完成</text>
+
+  <text class="mono" x="20" y="64">FOUT</text>
+  <rect class="bx-a" x="150" y="46" width="330" height="28" rx="4"/><text class="sm on-a" x="315" y="65" text-anchor="middle">先用后备字体显示</text>
+  <rect class="bx-g" x="480" y="46" width="260" height="28" rx="4"/><text class="sm on-g" x="610" y="65" text-anchor="middle">突然换成 Web 字体（可能跳动）</text>
+
+  <text class="mono" x="20" y="108">FOIT</text>
+  <rect class="bx-d" x="150" y="90" width="330" height="28" rx="4"/><text class="sm" x="315" y="109" text-anchor="middle">文字不可见（空白）</text>
+  <rect class="bx-g" x="480" y="90" width="260" height="28" rx="4"/><text class="sm on-g" x="610" y="109" text-anchor="middle">显示 Web 字体</text>
+
+  <text class="mono" x="20" y="152">JS 控制</text>
+  <rect class="bx-b" x="150" y="134" width="330" height="28" rx="4"/><text class="sm on-b" x="315" y="153" text-anchor="middle">显示加载动画 / 骨架屏</text>
+  <rect class="bx-g" x="480" y="134" width="260" height="28" rx="4"/><text class="sm on-g" x="610" y="153" text-anchor="middle">await font.load() 后再渲染</text>
+</svg>
+<figcaption>图 17-4　Web 字体加载期间的三种体验</figcaption>
+</figure>
+
+<p>CSS Font Loading API 让你用 JS 精确地知道字体何时可用：</p>
+
+<div class="code" data-lang="js" data-file="17-09-roboto.js">
+<script type="text/plain">
+const roboto = new FontFace(
+  'Roboto',
+  'url(https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu72xKKTU1Kvnz.woff2)',
+  { style: 'normal', weight: 400 }
+);
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="17-10-add-global-font.js">
+<script type="text/plain">
+// document.fonts 是一个 FontFaceSet，包含文档用到的所有字体。加进去才能被 CSS 使用
+document.fonts.add(roboto);
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="17-11-wait-font-load.js">
+<script type="text/plain">
+// 到目前为止只是「定义」了字体，调用 load() 才开始下载
+roboto.load()
+  .then(() => {
+    // 字体已加载，可以使用了
+  })
+  .catch(error => {
+    // URL 写错、网络失败等
+  });
+
+// 使用多个字体时，可以等待所有字体就绪
+await document.fonts.ready;
+</script>
+</div>
+
+<p>
+  用 CSS 的 <code>@font-face</code> 声明字体时，你无从得知字体何时加载完成。Font Loading API 补上了这块：
+  比如应用启动时的加载动画可以一直播放到字体就绪，再开始渲染界面。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 大多数时候，CSS 就够了</div>
+  <p>
+    用 JS 等字体意味着字体慢的时候整个页面都跟着慢。更常见的做法是在 <code>@font-face</code> 中用 <code>font-display</code> 控制策略，
+    并用 <code>&lt;link rel="preload"&gt;</code> 提前下载：
+  </p>
+  <div class="code" data-lang="html">
+<script type="text/plain">
+<link rel="preload" href="/fonts/roboto.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  @font-face {
+    font-family: 'Roboto';
+    src: url('/fonts/roboto.woff2') format('woff2');
+    font-display: swap;       /* swap=FOUT；block=短暂 FOIT；optional=没及时加载好就本次不用 */
+    size-adjust: 105%;        /* 调整后备字体的度量，减少替换时的布局跳动 */
+  }
+</style>
+</script>
+  </div>
+  <p>中文字体文件通常有几 MB，更要谨慎：优先使用系统字体，或用子集化 / <code>unicode-range</code> 按需加载。</p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：用 FontFace 加载一个 Google 字体</div>
+  <div class="b">
+    <div class="row"><button id="font-btn">加载 Lobster 字体</button><span class="hint" id="font-state"></span></div>
+    <p id="font-sample" style="font-size:26px;margin:10px 0 0">Hello, Web Fonts! 1234</p>
+  </div>
+</div>
+
+<h2 id="r17-3"><span class="rn">17.3</span>给 DOM 变化加过渡动画</h2>
+
+<p class="prob">切换视图（隐藏一块内容、显示另一块）时，希望有平滑的过渡，而不是瞬间跳变。</p>
+
+<div class="code" data-lang="js" data-file="17-12-simple-view-transition.js">
+<script type="text/plain">
+function showAboutPage() {
+  document.startViewTransition(() => {
+    // 在回调里修改 DOM
+    document.querySelector('#home-page').style.display = 'none';
+    document.querySelector('#about-page').style.display = 'block';
+  });
+}
+</script>
+</div>
+
+<p>默认效果是交叉淡入淡出。想调整速度，可以给过渡的伪元素设置动画时长：</p>
+
+<div class="code" data-lang="css" data-file="17-13-slow-transition.css">
+<script type="text/plain">
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 2s;
+}
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="View Transitions 的工作流程与伪元素树">
+  <rect class="bx" x="20" y="20" width="160" height="56" rx="10"/>
+  <text class="lbl" x="100" y="44" text-anchor="middle">① 给旧画面截图</text>
+  <text class="sm" x="100" y="62" text-anchor="middle">页面暂时「冻结」</text>
+  <path class="ln" d="M182 48 H216" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="220" y="20" width="170" height="56" rx="10"/>
+  <text class="lbl on-a" x="305" y="44" text-anchor="middle">② 执行你的回调</text>
+  <text class="sm" x="305" y="62" text-anchor="middle">修改 DOM</text>
+  <path class="ln" d="M392 48 H426" marker-end="url(#ar)"/>
+  <rect class="bx" x="430" y="20" width="140" height="56" rx="10"/>
+  <text class="lbl" x="500" y="44" text-anchor="middle">③ 新画面</text>
+  <text class="sm" x="500" y="62" text-anchor="middle">实时渲染</text>
+  <path class="ln" d="M572 48 H606" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="610" y="20" width="130" height="56" rx="10"/>
+  <text class="lbl on-g" x="675" y="44" text-anchor="middle">④ 动画过渡</text>
+  <text class="sm" x="675" y="62" text-anchor="middle">旧 → 新</text>
+
+  <text class="ttl" x="20" y="116">过渡期间，浏览器在页面最上层生成一棵伪元素树：</text>
+  <g class="mono" style="font-size:12.5px">
+    <text x="40" y="146">::view-transition</text>
+    <text x="70" y="170">└ ::view-transition-group(root)</text>
+    <text x="100" y="194">└ ::view-transition-image-pair(root)</text>
+    <text class="on-r" x="130" y="218">├ ::view-transition-old(root)</text>
+    <text class="on-g" x="130" y="242">└ ::view-transition-new(root)</text>
+  </g>
+  <text class="sm" x="470" y="146">覆盖整个页面的顶层容器</text>
+  <text class="sm" x="470" y="170">一组过渡（负责位置和大小的变化）</text>
+  <text class="sm" x="470" y="194">新旧两张图的容器</text>
+  <text class="sm on-r" x="470" y="218">旧画面截图（默认淡出）</text>
+  <text class="sm on-g" x="470" y="242">新画面（默认淡入）</text>
+  <text class="sm" x="20" y="278">括号里的名字：root 是整个页面；* 匹配所有组；自定义名字由元素的 view-transition-name 属性指定</text>
+</svg>
+<figcaption>图 17-5　View Transition：截图、更新、对新旧画面做动画</figcaption>
+</figure>
+
+<p>
+  给某个元素设置 <code>view-transition-name: hero</code>，它就会从 root 中「独立」出来，拥有自己的一组伪元素。
+  如果新旧画面中都有同名元素，浏览器会自动计算位置和尺寸的变化，做出「共享元素」飞过去的效果 —— 以前这需要相当复杂的 FLIP 动画技巧。
+  你也可以用 <code>@keyframes</code> 定义自己的动画，应用到 <code>::view-transition-old</code> / <code>::view-transition-new</code> 上。
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 生产环境的写法：特性检测 + 尊重减弱动效偏好
+function transition(update) {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!document.startViewTransition || reduce) {
+    update();                 // 不支持就直接更新，功能不受影响
+    return;
+  }
+  const t = document.startViewTransition(update);
+  return t.finished;          // 还有 ready、updateCallbackDone 两个 Promise
+}
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：View Transition 切换视图</div>
+  <div class="b">
+    <div class="row"><button id="vt-home">首页</button><button id="vt-about">关于</button><span class="hint" id="vt-note"></span></div>
+    <div id="vt-stage">
+      <div class="vt-card" id="vt-home-page"><h4>🏠 首页</h4><p style="margin:0">这是首页内容。点击「关于」看看过渡效果。</p></div>
+      <div class="vt-card" id="vt-about-page" style="display:none;min-height:110px"><h4>ℹ️ 关于</h4><p style="margin:0">这是关于页面，高度不同，过渡时尺寸也会平滑变化。</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 支持现状与跨页面过渡</div>
+  <p>
+    同一文档内的 <code>startViewTransition</code>：书写作时只有 Chrome 支持，现在 Safari 18 与 Firefox 144 都已支持，成为 <span class="bl newly">Baseline 2025</span>。
+    更进一步，<strong>跨文档</strong>的视图过渡（普通的多页网站，点链接跳到另一个 HTML 页面也有过渡动画）只需要在两个页面的 CSS 中各写一行，
+    目前 Chrome 与 Safari 已支持。<span class="bl limited">有限支持</span>
+  </p>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+@view-transition {
+  navigation: auto;   /* 同源页面之间跳转时自动做视图过渡，零 JS */
+}
+</script>
+  </div>
+</div>
+
+<h2 id="r17-4"><span class="rn">17.4</span>在运行时修改样式表</h2>
+
+<p class="prob">你想在页面运行时动态添加一条 CSS 规则。</p>
+
+<div class="code" data-lang="js" data-file="17-14-add-css-rule.js">
+<script type="text/plain">
+const [stylesheet] = document.styleSheets;   // 页面的第一个样式表
+stylesheet.insertRule(`
+  .some-selector {
+    background-color: red;
+  }
+`);
+</script>
+</div>
+
+<p>比如单页应用动态加入了新内容，可以同时加入它需要的样式规则。</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 三个注意点</div>
+  <ul>
+    <li><code>insertRule(rule, index)</code> 的第二个参数默认为 0，新规则插在样式表的<strong>最前面</strong>，优先级相同时会被后面的规则覆盖。想放在最后：<code>insertRule(rule, sheet.cssRules.length)</code>。</li>
+    <li>来自其他域名的样式表（如 CDN 上的 CSS）不允许读取和修改 <code>cssRules</code>，会抛出 <code>SecurityError</code>。</li>
+    <li>一次只能插入一条规则。</li>
+  </ul>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 更好的选择：CSS 变量与可构造样式表</div>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+// 1. 只想改一个值？改 CSS 自定义属性（变量）最简单
+document.documentElement.style.setProperty('--accent', 'hotpink');
+
+// 2. 需要一整套动态规则？创建自己的样式表对象（Baseline 2023）
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(`.some-selector { background-color: red; }`);
+document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+// 之后可以随时 sheet.replaceSync(...) 整体替换，或者从数组中移除
+</script>
+  </div>
+</div>
+
+<h2 id="r17-5"><span class="rn">17.5</span>按条件设置 CSS 类</h2>
+
+<p class="prob">只在某个条件成立时给元素加上一个 class。</p>
+
+<div class="code" data-lang="js" data-file="17-15-toggle-class.js">
+<script type="text/plain">
+// isExpanded 为 true 时加上 expanded，为 false 时去掉
+element.classList.toggle('expanded', isExpanded);
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>方法</th><th>作用</th></tr>
+  <tr><td><code>classList.add('a', 'b')</code></td><td>添加（已存在则无效果）</td></tr>
+  <tr><td><code>classList.remove('a')</code></td><td>移除（不存在则无效果）</td></tr>
+  <tr><td><code>classList.toggle('a')</code></td><td>有就删，没有就加；返回切换后是否存在</td></tr>
+  <tr><td><code>classList.toggle('a', 条件)</code></td><td>条件为真则加，为假则删 —— 替代 <code>if (c) add() else remove()</code></td></tr>
+  <tr><td><code>classList.contains('a')</code></td><td>是否存在</td></tr>
+  <tr><td><code>classList.replace('a', 'b')</code></td><td>把 a 换成 b</td></tr>
+</table>
+</div>
+
+<h2 id="r17-6"><span class="rn">17.6</span>匹配媒体查询</h2>
+
+<p class="prob">在 JS 中判断某个媒体查询是否成立，比如系统是否处于深色模式。</p>
+
+<div class="code" data-lang="js" data-file="17-16-dark-color-scheme.js">
+<script type="text/plain">
+const isDarkTheme = window.matchMedia('(prefers-color-scheme: dark)').matches;
+</script>
+</div>
+
+<p><code>matchMedia</code> 返回一个 <code>MediaQueryList</code>，除了 <code>matches</code>，还能监听 <code>change</code> 事件 —— 用户在系统设置中切换主题时就会触发：</p>
+
+<div class="code" data-lang="js" data-file="17-17-listen-changes.js">
+<script type="text/plain">
+const query = window.matchMedia('(prefers-color-scheme: dark)');
+
+query.addEventListener('change', () => {
+  if (query.matches) {
+    // 切换到深色模式
+  } else {
+    // 切换到浅色模式
+  }
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="常用的媒体查询特性">
+  <rect class="bx-b" x="20" y="20" width="230" height="130" rx="10"/>
+  <text class="ttl on-b" x="135" y="44" text-anchor="middle">用户偏好</text>
+  <text class="mono" x="36" y="70">prefers-color-scheme</text>
+  <text class="mono" x="36" y="92">prefers-reduced-motion</text>
+  <text class="mono" x="36" y="114">prefers-contrast</text>
+  <text class="mono" x="36" y="136">prefers-reduced-data</text>
+  <rect class="bx-g" x="265" y="20" width="230" height="130" rx="10"/>
+  <text class="ttl on-g" x="380" y="44" text-anchor="middle">视口与设备</text>
+  <text class="mono" x="281" y="70">(min-width: 768px)</text>
+  <text class="mono" x="281" y="92">(orientation: portrait)</text>
+  <text class="mono" x="281" y="114">(hover: hover)</text>
+  <text class="mono" x="281" y="136">(pointer: coarse)</text>
+  <rect class="bx-a" x="510" y="20" width="230" height="130" rx="10"/>
+  <text class="ttl on-a" x="625" y="44" text-anchor="middle">显示</text>
+  <text class="mono" x="526" y="70">(resolution: 2dppx)</text>
+  <text class="mono" x="526" y="92">(display-mode: standalone)</text>
+  <text class="mono" x="526" y="114">print</text>
+  <text class="sm" x="526" y="136">standalone = 已安装为应用</text>
+</svg>
+<figcaption>图 17-6　CSS 能用的媒体查询，matchMedia 都能用</figcaption>
+</figure>
+
+<p>
+  第 8 章的 <code>prefers-reduced-motion</code> 也是同样的用法。本教程右下角的深浅色切换按钮，初始值就来自 <code>prefers-color-scheme</code>。
+  注意旧代码里的 <code>query.addListener(fn)</code> 已经废弃，请用 <code>addEventListener('change', fn)</code>。
+</p>
+
+<div class="demo">
+  <div class="h">试一试：实时的 matchMedia 结果（调整窗口宽度或切换系统主题）</div>
+  <div class="b"><div class="out" id="mm-out" style="min-height:0"></div></div>
+</div>
+
+<h2 id="r17-7"><span class="rn">17.7</span>获取元素的计算样式</h2>
+
+<p class="prob">你想知道一个元素最终生效的样式值，包括来自样式表（而不是内联 style）的样式。</p>
+
+<div class="code" data-lang="html" data-file="17-18-html-style.html">
+<script type="text/plain">
+<style>
+  #content {
+    background-color: blue;
+  }
+  .container {
+    background-color: red;
+    color: white;
+  }
+</style>
+<div id="content" class="container">What color am I?</div>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="17-19-get-computed-style.js">
+<script type="text/plain">
+const content = document.querySelector('#content');
+const styles = window.getComputedStyle(content);
+console.log(styles.backgroundColor);   // 'rgb(0, 0, 255)'
+</script>
+</div>
+
+<p>
+  ID 选择器的优先级高于 class 选择器，所以背景色是蓝色。注意返回值是<strong>计算后的值</strong>：颜色统一变成 <code>rgb(...)</code> 格式，长度统一变成 <code>px</code>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="element.style 只包含内联样式，getComputedStyle 包含层叠后的最终结果">
+  <rect class="bx" x="20" y="20" width="200" height="50" rx="8"/>
+  <text class="lbl" x="120" y="42" text-anchor="middle">浏览器默认样式</text>
+  <text class="sm" x="120" y="60" text-anchor="middle">div { display: block }</text>
+  <rect class="bx-b" x="20" y="80" width="200" height="60" rx="8"/>
+  <text class="lbl on-b" x="120" y="100" text-anchor="middle">样式表</text>
+  <text class="sm" x="120" y="118" text-anchor="middle">#content { background: blue }</text>
+  <text class="sm" x="120" y="134" text-anchor="middle">.container { background: red }</text>
+  <rect class="bx-a" x="20" y="150" width="200" height="50" rx="8"/>
+  <text class="lbl on-a" x="120" y="172" text-anchor="middle">内联样式</text>
+  <text class="sm" x="120" y="190" text-anchor="middle">style="color: white"</text>
+
+  <path class="ln" d="M222 45 L330 100" marker-end="url(#ar)"/>
+  <path class="ln" d="M222 110 H326" marker-end="url(#ar)"/>
+  <path class="ln" d="M222 175 L330 120" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="334" y="80" width="130" height="60" rx="10"/>
+  <text class="lbl on-p" x="399" y="106" text-anchor="middle">层叠计算</text>
+  <text class="sm" x="399" y="124" text-anchor="middle">优先级 · 继承</text>
+  <path class="ln-g" d="M466 110 H510" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="514" y="80" width="226" height="60" rx="10"/>
+  <text class="mono on-g" x="627" y="104" text-anchor="middle">getComputedStyle(el)</text>
+  <text class="sm" x="627" y="124" text-anchor="middle">最终结果：全部属性</text>
+
+  <path class="ln-a" d="M222 188 H510" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="514" y="164" width="226" height="50" rx="10"/>
+  <text class="mono on-a" x="627" y="186" text-anchor="middle">el.style</text>
+  <text class="sm" x="627" y="204" text-anchor="middle">只有内联样式那一层</text>
+</svg>
+<figcaption>图 17-7　element.style 只看得到内联那一层；getComputedStyle 看到的是最终结果</figcaption>
+</figure>
+
+<div class="code" data-lang="html" data-file="17-20-inline-styles.html">
+<script type="text/plain">
+<style>
+  #content {
+    background-color: blue;
+  }
+</style>
+<div id="content" style="color: white;">Content</div>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="17-21 / 17-22">
+<script type="text/plain">
+const content = document.querySelector('#content');
+
+// element.style 只包含内联样式
+console.log(content.style.backgroundColor);   // ''（空字符串：背景色来自样式表）
+console.log(content.style.color);             // 'white'
+
+// getComputedStyle 包含样式表和内联样式的最终结果
+const styles = window.getComputedStyle(content);
+console.log(styles.backgroundColor);          // 'rgb(0, 0, 255)'
+console.log(styles.color);                    // 'rgb(255, 255, 255)'
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 谨慎使用 getComputedStyle</div>
+  <p>
+    调用它会迫使浏览器立刻完成样式（有时还有布局）计算。在循环中反复「改样式 → 读计算样式 → 改样式」，会导致<strong>布局抖动</strong>（layout thrashing），严重拖慢页面。
+    需要读多个值时，先集中读完，再集中写。它返回的对象是「活的」，元素样式变化后读取到的值也会变。
+  </p>
+</div>
+
+<div class="demo cs-demo">
+  <div class="h">试一试：element.style 与 getComputedStyle</div>
+  <div class="b">
+    <div id="cs-content" class="cs-container" style="font-weight: bold;">What color am I?</div>
+    <div class="out" id="cs-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>Custom Highlight API：<code>Range</code> 圈文字 → <code>new Highlight()</code> → <code>CSS.highlights.set(名字, …)</code> → <code>::highlight(名字)</code> 写样式；不改 DOM，能跨元素。</li>
+  <li>Font Loading API：<code>new FontFace()</code> + <code>document.fonts.add()</code> + <code>load()</code>；<code>document.fonts.ready</code> 等待全部字体；多数情况 <code>font-display</code> 就够。</li>
+  <li>View Transitions：<code>document.startViewTransition(更新DOM的回调)</code>，用 <code>::view-transition-*</code> 伪元素和 <code>view-transition-name</code> 定制动画；记得特性检测。</li>
+  <li><code>insertRule</code> 动态加规则；改一个值用 CSS 变量；整套规则用可构造样式表。</li>
+  <li><code>classList.toggle(名, 条件)</code> 按条件切换类；<code>matchMedia</code> 查询并监听媒体条件变化。</li>
+  <li><code>element.style</code> 只有内联样式；<code>getComputedStyle</code> 是层叠后的最终值，注意性能。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>扩展本章的搜索高亮：用两种高亮（<code>current</code> 和 <code>others</code>）区分「当前匹配项」与「其他匹配项」，按回车跳到下一个。</li>
+    <li>做一个图片画廊：点击缩略图时，用 View Transition 和 <code>view-transition-name</code> 让图片「飞」到大图位置。</li>
+    <li>写一个主题切换器：跟随系统（<code>matchMedia</code> + <code>change</code> 事件）、强制浅色、强制深色三选一，并记住用户选择（第 2 章）。</li>
+    <li>用 <code>getComputedStyle</code> 写一个「取色器」：点击页面上任意元素，显示它的前景色、背景色和字体。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // ---- 高亮搜索 ----
+  var q = document.getElementById('hl-q'), n = document.getElementById('hl-n'), root = document.getElementById('hl-text');
+  function search() {
+    if (!('highlights' in CSS)) { n.textContent = '你的浏览器不支持 CSS Custom Highlight API'; return; }
+    CSS.highlights.delete('search-hit');
+    var word = q.value.trim().toLowerCase(); if (!word) { n.textContent = ''; return; }
+    var ranges = [], walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), node;
+    while ((node = walker.nextNode())) {
+      var text = node.textContent.toLowerCase(), i = 0;
+      while ((i = text.indexOf(word, i)) !== -1) {
+        var r = new Range(); r.setStart(node, i); r.setEnd(node, i + word.length); ranges.push(r); i += word.length;
+      }
+    }
+    CSS.highlights.set('search-hit', new Highlight(...ranges));
+    n.textContent = '找到 ' + ranges.length + ' 处（DOM 没有被修改）';
+  }
+  q.addEventListener('input', search); search();
+
+  // ---- 字体 ----
+  var fs = document.getElementById('font-state'), sample = document.getElementById('font-sample');
+  document.getElementById('font-btn').onclick = function () {
+    if (!window.FontFace) { fs.textContent = '不支持 FontFace'; return; }
+    var f = new FontFace('Lobster', 'url(https://fonts.gstatic.com/s/lobster/v32/neILzCirqoswsqX9zoKmMw.woff2)');
+    document.fonts.add(f);
+    fs.textContent = 'status = ' + f.status + '，开始 load()…';
+    var t0 = performance.now();
+    f.load().then(function () {
+      fs.textContent = 'status = ' + f.status + '，耗时 ' + Math.round(performance.now() - t0) + ' ms';
+      sample.style.fontFamily = 'Lobster, cursive';
+    }).catch(function (e) { fs.textContent = 'status = ' + f.status + '：' + e.message; });
+  };
+
+  // ---- View Transition ----
+  var home = document.getElementById('vt-home-page'), about = document.getElementById('vt-about-page');
+  if (!document.startViewTransition) document.getElementById('vt-note').textContent = '不支持 View Transitions，将直接切换';
+  function go(showAbout) {
+    var update = function () { home.style.display = showAbout ? 'none' : 'block'; about.style.display = showAbout ? 'block' : 'none'; };
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!document.startViewTransition || reduce) update(); else document.startViewTransition(update);
+  }
+  document.getElementById('vt-home').onclick = function () { go(false); };
+  document.getElementById('vt-about').onclick = function () { go(true); };
+
+  // ---- matchMedia ----
+  var mo = document.getElementById('mm-out');
+  var qs = ['(prefers-color-scheme: dark)', '(prefers-reduced-motion: reduce)', '(min-width: 900px)', '(orientation: portrait)', '(hover: hover)', '(pointer: coarse)'];
+  var mqls = qs.map(function (s) { return matchMedia(s); });
+  function mm() { mo.textContent = mqls.map(function (m) { return (m.matches ? '✓ ' : '✗ ') + m.media; }).join('\n'); }
+  mqls.forEach(function (m) { m.addEventListener('change', mm); }); mm();
+
+  // ---- computed style ----
+  var c = document.getElementById('cs-content'), cs = getComputedStyle(c);
+  document.getElementById('cs-out').textContent =
+    "el.style.backgroundColor        = " + JSON.stringify(c.style.backgroundColor) + '\n' +
+    "el.style.fontWeight             = " + JSON.stringify(c.style.fontWeight) + '\n' +
+    "getComputedStyle(el).backgroundColor = " + JSON.stringify(cs.backgroundColor) + '\n' +
+    "getComputedStyle(el).color           = " + JSON.stringify(cs.color) + '\n' +
+    "getComputedStyle(el).fontWeight      = " + JSON.stringify(cs.fontWeight) + '\n' +
+    "getComputedStyle(el).paddingLeft     = " + JSON.stringify(cs.paddingLeft);
+})();
+</script>
+</body>
+</html>

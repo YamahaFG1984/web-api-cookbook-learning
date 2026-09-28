@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 6 章 · 观察 DOM 元素 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .io-box { height: 220px; overflow: auto; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); position: relative; }
+  .io-box .spacer { height: 260px; display: grid; place-items: center; color: var(--fg-faint); font-size: 13px; }
+  .io-target { margin: 0 auto; width: 70%; height: 120px; border-radius: 10px; display: grid; place-items: center;
+               background: var(--blue-bg); border: 2px solid var(--blue); color: var(--blue); font-weight: 700; transition: background .2s, border-color .2s, color .2s; }
+  .io-target.on { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+  .rs-box { resize: horizontal; overflow: auto; min-width: 140px; max-width: 100%; width: 60%; padding: 14px; border: 2px dashed var(--accent);
+            border-radius: 10px; background: var(--accent-bg); color: var(--accent-2); font-weight: 600; }
+  .inf-list { height: 220px; overflow: auto; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); padding: 8px; }
+  .inf-list .item { padding: 8px 12px; margin: 6px 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
+  .inf-list .sentinel { text-align: center; color: var(--fg-faint); font-size: 13px; padding: 10px; }
+  .mo-list { margin: 8px 0 0; padding-left: 1.4em; }
+</style>
+</head>
+<body data-chapter="6">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 6 章</span>
+<h1>观察 DOM 元素</h1>
+<p class="lede">
+  「元素滚动到屏幕里了吗？」「元素的尺寸变了吗？」「元素的子节点被改了吗？」
+  以前回答这些问题要监听滚动事件、开定时器反复测量，既麻烦又耗性能。
+  现在浏览器提供了三个<strong>观察者</strong>：<code>IntersectionObserver</code>、<code>ResizeObserver</code>、<code>MutationObserver</code>，
+  你只需要说「我关心什么」，变化发生时浏览器会通知你。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>掌握三种观察者共同的使用模式：创建 → observe → 回调收到 entries → 断开</li>
+    <li>用 IntersectionObserver 实现图片懒加载、视频自动暂停、滚动入场动画、无限滚动</li>
+    <li>用 MutationObserver 监听子元素变化并平滑过渡高度</li>
+    <li>用 ResizeObserver 根据元素尺寸调整内容</li>
+    <li>了解哪些场景今天已经可以用纯 HTML / CSS 解决（<code>loading="lazy"</code>、容器查询、滚动驱动动画）</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">三种观察者，一个套路</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="观察者的通用使用模式">
+  <rect class="bx-a" x="20" y="30" width="190" height="60" rx="10"/>
+  <text class="mono on-a" x="115" y="56" text-anchor="middle">new XxxObserver(</text>
+  <text class="mono on-a" x="115" y="74" text-anchor="middle">callback, options?)</text>
+  <path class="ln" d="M212 60 H258" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="262" y="30" width="190" height="60" rx="10"/>
+  <text class="mono on-b" x="357" y="56" text-anchor="middle">observer.observe(</text>
+  <text class="mono on-b" x="357" y="74" text-anchor="middle">element, options?)</text>
+  <path class="ln" d="M454 60 H500" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="504" y="30" width="236" height="60" rx="10"/>
+  <text class="mono on-g" x="622" y="56" text-anchor="middle">callback(entries, observer)</text>
+  <text class="sm" x="622" y="74" text-anchor="middle">每次变化，浏览器批量通知</text>
+  <path class="ln-g" d="M622 92 V120 H357 V94" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="490" y="136" text-anchor="middle">可以一直观察下去，也可以随时增加观察目标</text>
+
+  <rect class="bx" x="20" y="150" width="340" height="44" rx="8"/>
+  <text class="mono" x="190" y="170" text-anchor="middle">observer.unobserve(element)</text>
+  <text class="sm" x="190" y="186" text-anchor="middle">不再观察某一个元素</text>
+  <rect class="bx" x="400" y="150" width="340" height="44" rx="8"/>
+  <text class="mono" x="570" y="170" text-anchor="middle">observer.disconnect()</text>
+  <text class="sm" x="570" y="186" text-anchor="middle">停止观察所有元素</text>
+</svg>
+<figcaption>图 6-1　三种观察者的 API 形状完全一样</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>观察者</th><th>关心什么</th><th>entry 里有什么</th><th>典型用途</th></tr>
+  <tr><td><code>IntersectionObserver</code></td><td>元素与视口（或某个滚动容器）是否相交、相交多少</td><td><code>isIntersecting</code>、<code>intersectionRatio</code>、<code>target</code></td><td>懒加载、曝光统计、无限滚动</td></tr>
+  <tr><td><code>ResizeObserver</code></td><td>元素尺寸变化</td><td><code>contentRect</code>、<code>contentBoxSize</code>、<code>borderBoxSize</code></td><td>自适应组件、图表重绘</td></tr>
+  <tr><td><code>MutationObserver</code></td><td>子节点、属性、文本内容的变化</td><td><code>type</code>、<code>addedNodes</code>、<code>removedNodes</code>、<code>attributeName</code></td><td>响应第三方代码的 DOM 修改</td></tr>
+</table>
+</div>
+
+<h3>IntersectionObserver 的「相交比例」</h3>
+
+<p>
+  可滚动区域（整个窗口，或一个 <code>overflow: auto</code> 的元素）称为<strong>根</strong>（root）。
+  元素有任何一部分出现在根的可视范围内，就说它与根<strong>相交</strong>。可见部分占元素自身面积的比例叫 <code>intersectionRatio</code>：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 280" role="img" aria-label="元素与视口的三种相交状态">
+  <rect class="bx-a" x="250" y="70" width="260" height="150" rx="8" style="fill:none;stroke-width:3"/>
+  <text class="ttl on-a" x="380" y="92" text-anchor="middle">视口（root）</text>
+
+  <rect class="bx" x="40" y="110" width="140" height="70" rx="8"/>
+  <text class="lbl" x="110" y="140" text-anchor="middle">元素 1</text>
+  <text class="sm" x="110" y="158" text-anchor="middle">ratio = 0</text>
+  <text class="sm on-r" x="110" y="200" text-anchor="middle">不相交</text>
+
+  <rect class="bx-b" x="440" y="18" width="130" height="100" rx="8" style="fill-opacity:.85"/>
+  <text class="lbl on-b" x="505" y="44" text-anchor="middle">元素 2</text>
+  <text class="sm" x="600" y="56">ratio ≈ 0.25</text>
+  <text class="sm on-b" x="600" y="72">部分相交</text>
+  <text class="sm" x="600" y="88">isIntersecting = true</text>
+
+  <rect class="bx-g" x="290" y="120" width="140" height="80" rx="8"/>
+  <text class="lbl on-g" x="360" y="152" text-anchor="middle">元素 3</text>
+  <text class="sm" x="360" y="170" text-anchor="middle">ratio = 1</text>
+  <text class="sm on-g" x="360" y="240" text-anchor="middle">完全相交</text>
+
+  <text class="ttl" x="560" y="170">threshold 决定何时通知：</text>
+  <text class="sm" x="560" y="190">默认 0：露出 1 像素就通知</text>
+  <text class="sm" x="560" y="208">1：完全露出才通知</text>
+  <text class="sm" x="560" y="226">[0, 0.5, 1]：三个时刻都通知</text>
+</svg>
+<figcaption>图 6-2　元素 1 不相交，元素 2 部分相交，元素 3 完全相交</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：滚动下面的盒子，观察相交比例</div>
+  <div class="b">
+    <div class="io-box" id="io-root">
+      <div class="spacer">↓ 向下滚动</div>
+      <div class="io-target" id="io-target">我是被观察的元素</div>
+      <div class="spacer">↑ 向上滚动</div>
+    </div>
+    <div class="out" id="io-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r6-1"><span class="rn">6.1</span>滚动到可见时再加载图片（懒加载）</h2>
+
+<p class="prob">页面上有很多图片，你希望等图片滚动到可见区域时才开始下载，节省流量、加快首屏速度。</p>
+
+<div class="code" data-lang="js" data-file="6-01-lazy-load-image.js">
+<script type="text/plain">
+/**
+ * 观察图片元素，实现懒加载
+ * @param img 图片 DOM 节点
+ * @param url 要加载的图片地址
+ */
+function lazyLoad(img, url) {
+  const observer = new IntersectionObserver(entries => {
+    // 图片进入视口时 isIntersecting 变为 true：设置 src，停止观察
+    if (entries[0].isIntersecting) {
+      img.src = url;
+      observer.disconnect();
+    }
+  });
+
+  // 开始观察图片元素
+  observer.observe(img);
+}
+</script>
+</div>
+
+<ul>
+  <li>回调收到的是一个<strong>数组</strong>：一个观察者可以同时观察多个元素，同一时刻有多个元素进出时会一起通知。这里只观察了一张图，所以取 <code>entries[0]</code>。</li>
+  <li>图片加载后就不需要继续观察了，调用 <code>disconnect()</code> 释放资源。</li>
+  <li>在 IntersectionObserver 出现之前，只能监听 <code>scroll</code> 事件、在每次滚动时计算 <code>getBoundingClientRect()</code>，还得节流防抖。现在这些都由浏览器在后台高效完成。</li>
+</ul>
+
+<div class="box tip">
+  <div class="t">&#128161; 提前一点加载：rootMargin</div>
+  <p>
+    等图片真的露出来再下载，用户会看到一小段空白。用 <code>rootMargin</code> 把「视口」向外扩大，提前开始加载：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+// 图片距离视口底部还有 300px 时就开始加载
+new IntersectionObserver(callback, { rootMargin: '300px 0px' });
+</script>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 纯 HTML 懒加载：<code>loading="lazy"</code></div>
+  <p>
+    书中把它当作「较新浏览器才有的功能」。今天它已是 <span class="bl wide">Baseline 广泛可用</span>，对图片和 <code>&lt;iframe&gt;</code> 都有效。
+    <strong>如果只是懒加载图片，首选这个属性，一行 JS 都不用写</strong>，浏览器还会根据网速自动调整提前量：
+  </p>
+  <div class="code" data-lang="html">
+<script type="text/plain">
+<!-- 务必写上宽高，避免图片加载后页面跳动 -->
+<img src="/photos/cat.jpg" loading="lazy" width="800" height="600" alt="一只猫">
+
+<!-- 首屏最重要的大图则相反：不要懒加载，还可以提高优先级 -->
+<img src="/hero.jpg" fetchpriority="high" alt="">
+</script>
+  </div>
+  <p>IntersectionObserver 仍然适合「进入视口时做点别的事」的场景，比如下面几节的内容。</p>
+</div>
+
+<h2 id="r6-2"><span class="rn">6.2</span>把 IntersectionObserver 包装成 Promise</h2>
+
+<p class="prob">你想要一个 Promise，在元素进入视口时兑现。</p>
+
+<div class="code" data-lang="js" data-file="6-02-promisify-intersection-observer.js">
+<script type="text/plain">
+/**
+ * 返回一个 Promise，元素进入视口时兑现
+ */
+function waitForElement(element) {
+  return new Promise(resolve => {
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) {
+        observer.disconnect();
+        resolve();
+      }
+    });
+
+    observer.observe(element);
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="6-03-usage.js">
+<script type="text/plain">
+function lazyLoad(img, url) {
+  waitForElement(img)
+    .then(() => img.src = url);
+}
+
+// 或者用 await：等评论区滚动到可见，再去加载评论
+await waitForElement(document.querySelector('#comments'));
+loadComments();
+</script>
+</div>
+
+<p>
+  这正是第 1 章 1.7 节的 promisify 模式。它只适合「等待一次」：Promise 只能兑现一次，而元素可能进出视口很多次。
+</p>
+
+<h2 id="r6-3"><span class="rn">6.3</span>视频滚出屏幕时自动暂停</h2>
+
+<p class="prob">页面上有一个正在播放的视频，用户把它滚出屏幕时自动暂停，滚回来时继续播放。</p>
+
+<div class="code" data-lang="js" data-file="6-04-pause-resume-video.js">
+<script type="text/plain">
+const observer = new IntersectionObserver(entries => {
+  if (!entries[0].isIntersecting) {
+    video.pause();
+  } else {
+    video.play()
+      .catch(error => {
+        // 浏览器可能禁止自动播放；捕获错误，避免「未处理的 Promise 拒绝」
+      });
+  }
+});
+
+observer.observe(video);
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 自动播放策略</div>
+  <p>
+    浏览器对自动播放很严格：<strong>有声视频</strong>在用户与页面交互（点击、按键）之前，调用 <code>play()</code> 会被拒绝（Promise 以 <code>NotAllowedError</code> 拒绝）。
+    静音视频（<code>muted</code> 属性）通常允许自动播放。
+  </p>
+  <p>
+    无障碍角度看，页面一打开就自动播放视频也不好：可能引发前庭障碍用户不适，声音还会干扰屏幕阅读器。
+    实践中，这个方案应该只用于「用户已经主动点了播放」之后的便利功能 —— 比如记录一个 <code>userStarted</code> 标志，只有为 <code>true</code> 时才自动恢复播放。
+  </p>
+</div>
+
+<h2 id="r6-4"><span class="rn">6.4</span>内容变化时平滑过渡高度</h2>
+
+<p class="prob">一个元素的内容会动态变化，你希望它的高度能平滑地过渡，而不是突然跳变。</p>
+
+<p>
+  难点在于：CSS 不能从 <code>height: auto</code> 过渡到另一个 <code>auto</code>，必须是两个具体的像素值。
+  所以思路是：用 MutationObserver 监听子节点变化 → 测量新旧高度 → 在两个像素值之间过渡。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="测量并过渡高度的四个步骤">
+  <rect class="bx" x="20" y="40" width="160" height="110" rx="8"/>
+  <text class="ttl" x="100" y="30" text-anchor="middle">① 记下当前高度</text>
+  <rect class="bx-b" x="36" y="56" width="128" height="50" rx="6"/>
+  <text class="mono on-b" x="100" y="86" text-anchor="middle">height: 100px</text>
+  <text class="sm" x="100" y="136" text-anchor="middle">内容已变，但被固定高度裁住</text>
+
+  <rect class="bx" x="200" y="40" width="160" height="150" rx="8"/>
+  <text class="ttl" x="280" y="30" text-anchor="middle">② 设为 auto 并测量</text>
+  <rect class="bx-g" x="216" y="56" width="128" height="100" rx="6"/>
+  <text class="mono on-g" x="280" y="100" text-anchor="middle">height: auto</text>
+  <text class="mono on-g" x="280" y="118" text-anchor="middle">→ 180px</text>
+  <text class="sm" x="280" y="178" text-anchor="middle">读 offsetHeight 强制同步布局</text>
+
+  <rect class="bx" x="380" y="40" width="160" height="110" rx="8"/>
+  <text class="ttl" x="460" y="30" text-anchor="middle">③ 立刻改回旧值</text>
+  <rect class="bx-b" x="396" y="56" width="128" height="50" rx="6"/>
+  <text class="mono on-b" x="460" y="86" text-anchor="middle">height: 100px</text>
+  <text class="sm" x="460" y="136" text-anchor="middle">同一帧内，用户看不到闪烁</text>
+
+  <rect class="bx" x="560" y="40" width="180" height="170" rx="8"/>
+  <text class="ttl" x="650" y="30" text-anchor="middle">④ 下一帧设新值</text>
+  <rect class="bx-a" x="576" y="56" width="148" height="100" rx="6"/>
+  <text class="mono on-a" x="650" y="100" text-anchor="middle">height: 180px</text>
+  <text class="sm on-a" x="650" y="118" text-anchor="middle">transition 生效</text>
+  <text class="sm" x="650" y="180" text-anchor="middle">requestAnimationFrame</text>
+  <text class="sm" x="650" y="196" text-anchor="middle">100px ⟶ 180px 动画</text>
+  <path class="ln" d="M182 90 H196" marker-end="url(#ar)"/>
+  <path class="ln" d="M362 90 H376" marker-end="url(#ar)"/>
+  <path class="ln" d="M542 90 H556" marker-end="url(#ar)"/>
+</svg>
+<figcaption>图 6-3　「先测量终点，再从起点出发」的高度动画技巧</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="6-05-animate-height.js">
+<script type="text/plain">
+/**
+ * 观察元素的子节点变化。因子节点变化导致高度改变时，以动画过渡
+ */
+function animateHeightChanges(element) {
+  // 无法从 height: auto 开始动画，所以先设一个明确的高度。
+  // （原书写成 details.offsetHeight，应为 element，已更正）
+  element.style.height = `${element.offsetHeight}px`;
+
+  // 过渡动画需要的几个 CSS 属性
+  element.style.transition = 'height 200ms';
+  element.style.overflow = 'hidden';
+
+  const observer = new MutationObserver(entries => {
+    // entries 总是数组；这里只关心被观察的元素本身
+    const element = entries[0].target;
+
+    // (1) 记住当前高度，作为动画起点
+    const currentHeightValue = element.style.height;
+
+    // (2) 设为 auto，读取 offsetHeight 得到内容的新高度
+    element.style.height = 'auto';
+    const newHeight = element.offsetHeight;
+
+    // (3) 动画开始前，先把高度改回来
+    element.style.height = currentHeightValue;
+
+    // 在下一帧设置新高度，触发过渡动画
+    requestAnimationFrame(() => {
+      element.style.height = `${newHeight}px`;
+    });
+  });
+
+  // 开始观察子节点的增删
+  observer.observe(element, { childList: true });
+}
+</script>
+</div>
+
+<h3>MutationObserver 的观察选项</h3>
+
+<p><code>observe(element, options)</code> 的第二个参数决定观察哪些变化，至少要开启 <code>childList</code>、<code>attributes</code>、<code>characterData</code> 其中之一：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="MutationObserver 的几种观察范围">
+  <rect class="bx-a" x="280" y="20" width="200" height="40" rx="8"/>
+  <text class="mono on-a" x="380" y="45" text-anchor="middle">&lt;ul id="list" class="x"&gt;</text>
+  <rect class="bx" x="140" y="100" width="150" height="36" rx="8"/><text class="mono" x="215" y="123" text-anchor="middle">&lt;li&gt;苹果&lt;/li&gt;</text>
+  <rect class="bx" x="310" y="100" width="150" height="36" rx="8"/><text class="mono" x="385" y="123" text-anchor="middle">&lt;li&gt;香蕉&lt;/li&gt;</text>
+  <rect class="bx-g" x="480" y="100" width="150" height="36" rx="8"/><text class="mono on-g" x="555" y="123" text-anchor="middle">+ &lt;li&gt;新增&lt;/li&gt;</text>
+  <rect class="bx" x="310" y="170" width="150" height="36" rx="8"/><text class="mono" x="385" y="193" text-anchor="middle">&lt;b&gt;孙节点&lt;/b&gt;</text>
+  <path class="ln" d="M340 62 L230 98 M380 62 V98 M420 62 L540 98"/>
+  <path class="ln-d" d="M385 138 V168"/>
+  <text class="sm on-a" x="500" y="36">attributes：class 等属性变化</text>
+  <text class="sm on-g" x="555" y="156" text-anchor="middle">childList：直接子节点增删</text>
+  <text class="sm on-b" x="140" y="160">characterData：文本内容变化</text>
+  <text class="sm on-p" x="470" y="193">subtree：把观察范围扩展到所有后代</text>
+</svg>
+<figcaption>图 6-4　MutationObserver 能观察的三类变化，以及 subtree 的作用</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>选项</th><th>作用</th></tr>
+  <tr><td><code>childList: true</code></td><td>子节点被添加或删除</td></tr>
+  <tr><td><code>attributes: true</code></td><td>属性变化；配合 <code>attributeFilter: ['class', 'hidden']</code> 只看指定属性，<code>attributeOldValue: true</code> 记录旧值</td></tr>
+  <tr><td><code>characterData: true</code></td><td>文本节点内容变化；<code>characterDataOldValue: true</code> 记录旧值</td></tr>
+  <tr><td><code>subtree: true</code></td><td>以上观察扩展到所有后代节点，而不仅是元素本身和直接子节点</td></tr>
+</table>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：MutationObserver 记录每一次 DOM 变化</div>
+  <div class="b">
+    <div class="row">
+      <button id="mo-add">添加一项</button>
+      <button id="mo-remove">删除最后一项</button>
+      <button id="mo-class">切换 class</button>
+      <button id="mo-text">改第一项文字</button>
+    </div>
+    <div id="mo-wrap" style="border:1px dashed var(--line-2);border-radius:8px;padding:4px 12px;margin-top:8px">
+      <ul id="mo-list" class="mo-list"><li>苹果</li><li>香蕉</li></ul>
+    </div>
+    <div class="out" id="mo-out">（这里会列出 MutationRecord）</div>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 不写 JS 的高度过渡</div>
+  <p>
+    高度过渡是一个极其常见的需求，CSS 正在补上这块短板：
+  </p>
+  <ul>
+    <li><strong>Grid 技巧（到处可用）</strong>：外层 <code>display: grid; grid-template-rows: 0fr</code>，展开时改为 <code>1fr</code>，<code>grid-template-rows</code> 是可以过渡的。</li>
+    <li><strong><code>interpolate-size: allow-keywords</code></strong>：写在 <code>:root</code> 上后，<code>height: auto</code> 就能直接参与过渡。目前仅 Chromium 支持。<span class="bl limited">有限支持</span></li>
+  </ul>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+/* Grid 技巧 */
+.collapsible       { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 200ms; }
+.collapsible.open  { grid-template-rows: 1fr; }
+.collapsible > div { overflow: hidden; }
+
+/* 新写法（渐进增强：不支持的浏览器只是没有动画） */
+:root { interpolate-size: allow-keywords; }
+.panel { height: 0; overflow: hidden; transition: height 200ms; }
+.panel.open { height: auto; }
+</script>
+  </div>
+</div>
+
+<h2 id="r6-5"><span class="rn">6.5</span>根据元素尺寸改变内容</h2>
+
+<p class="prob">你想根据一个元素<strong>自身</strong>的宽度显示不同的内容，比如元素很宽时展示更多信息。</p>
+
+<div class="code" data-lang="js" data-file="6-06-resize-observer.js">
+<script type="text/plain">
+const container = document.querySelector('#resize-container');
+
+const observer = new ResizeObserver(entries => {
+  // 开始观察时回调会立即执行一次，所以可以用它设置初始文字
+  container.textContent = `My width is ${entries[0].contentRect.width}px`;
+});
+
+observer.observe(container);
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：拖动右下角改变宽度</div>
+  <div class="b">
+    <div class="rs-box" id="rs-box">拖我右下角</div>
+    <p class="hint">回调里读取的是 <code>entries[0].contentRect.width</code>，也就是不含内边距和边框的「内容区」宽度。</p>
+  </div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="content box 与 border box 的区别">
+  <rect class="bx-a" x="40" y="20" width="340" height="140" rx="4"/>
+  <rect class="bx-b" x="56" y="36" width="308" height="108" rx="2" style="fill:var(--panel)"/>
+  <rect class="bx-g" x="86" y="60" width="248" height="60" rx="2"/>
+  <text class="mono on-g" x="210" y="95" text-anchor="middle">content box</text>
+  <text class="sm on-b" x="210" y="52" text-anchor="middle">padding</text>
+  <text class="sm on-a" x="210" y="33" text-anchor="middle" style="font-size:10px">border</text>
+
+  <text class="mono" x="420" y="50">entry.contentRect</text>
+  <text class="sm" x="420" y="66">内容区的尺寸（最常用，老属性）</text>
+  <text class="mono on-g" x="420" y="96">entry.contentBoxSize[0]</text>
+  <text class="sm" x="420" y="112">.inlineSize（宽）/ .blockSize（高）</text>
+  <text class="mono on-a" x="420" y="142">entry.borderBoxSize[0]</text>
+  <text class="sm" x="420" y="158">包含内边距和边框</text>
+</svg>
+<figcaption>图 6-5　ResizeObserver 可以读到不同「盒子」的尺寸</figcaption>
+</figure>
+
+<div class="box warn">
+  <div class="t">&#9888; 小心无限循环</div>
+  <p>
+    如果回调里的修改又改变了元素尺寸（比如修改后的文字把元素撑大了），就会再次触发回调……
+    浏览器会在同一帧内中止这个循环，并在控制台报 <em>「ResizeObserver loop completed with undelivered notifications」</em>。
+    避免在回调里改变被观察元素本身的尺寸；确实需要时，把修改放进 <code>requestAnimationFrame</code> 推迟到下一帧。
+  </p>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 只是想改样式？用容器查询</div>
+  <p>
+    如果「根据尺寸显示不同内容」只涉及样式和布局，现在应该用 CSS <strong>容器查询</strong>，它是 <span class="bl wide">Baseline 广泛可用</span>：
+  </p>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+.card-wrapper { container-type: inline-size; }
+
+/* 父容器宽度 ≥ 500px 时，卡片改为左右布局 —— 与视口宽度无关 */
+@container (min-width: 500px) {
+  .card { display: flex; gap: 16px; }
+}
+</script>
+  </div>
+  <p>ResizeObserver 则留给真正需要 JS 的场景：重绘 Canvas 图表、计算虚拟列表、根据尺寸加载不同分辨率的数据。</p>
+</div>
+
+<h2 id="r6-6"><span class="rn">6.6</span>元素滚动进入视口时播放过渡</h2>
+
+<p class="prob">你希望图片滚动进入视口时淡入显示，而不是一开始就在那里。</p>
+
+<p>先用 CSS 把图片设为透明，并声明 <code>opacity</code> 的过渡：</p>
+
+<div class="code" data-lang="css" data-file="6-08-image-style.css">
+<script type="text/plain">
+img.animate {
+  opacity: 0;
+  transition: opacity 500ms;
+}
+</script>
+</div>
+
+<p>再用一个观察者观察所有需要动画的图片，<strong>露出 25% 时</strong>把 opacity 改为 1：</p>
+
+<div class="code" data-lang="js" data-file="6-07-fade-images.js">
+<script type="text/plain">
+const observer = new IntersectionObserver(entries => {
+  // 一行有多张图片，所以可能同时有多个 entry
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      // 图片已露出 25%，开始淡入
+      entry.target.style.opacity = 1;
+
+      // 只需播放一次，不再观察这张图
+      observer.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.25 });   // 露出 25% 时触发
+
+// 只观察带 animate 类名的图片
+document.querySelectorAll('img.animate').forEach(image => {
+  observer.observe(image);
+});
+</script>
+</div>
+
+<ul>
+  <li><code>threshold: 0.25</code> 让回调在元素露出 25% 时才触发，确保用户能看到动画。默认值 0 时，露出 1 像素就触发，动画很可能在屏幕外就播完了。</li>
+  <li>检查 <code>isIntersecting</code> 很有必要：开始观察时回调会<strong>立即执行一次</strong>，报告每个元素的初始状态，屏幕外的元素也会出现在 entries 里（<code>isIntersecting</code> 为 <code>false</code>）。</li>
+  <li>一个观察者观察多个元素，比每个元素各建一个观察者高效得多。</li>
+</ul>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="threshold 为 0.25 时的触发时机">
+  <rect class="bx-a" x="20" y="100" width="720" height="4" style="fill:var(--accent);stroke:none"/>
+  <text class="sm on-a" x="24" y="124">视口底边</text>
+  <rect class="bx" x="80" y="104" width="120" height="60" rx="6" style="opacity:.5"/>
+  <text class="sm" x="140" y="96" text-anchor="middle">还在下方</text>
+  <rect class="bx-b" x="300" y="80" width="120" height="80" rx="6"/>
+  <path class="ln-d" d="M300 100 H420"/>
+  <text class="sm on-b" x="360" y="72" text-anchor="middle">露出 25% → 回调触发</text>
+  <rect class="bx-g" x="520" y="10" width="120" height="80" rx="6"/>
+  <text class="sm on-g" x="580" y="54" text-anchor="middle">opacity: 1 ✓</text>
+  <text class="sm" x="660" y="54">已 unobserve</text>
+  <path class="ln" d="M200 130 C 240 130, 260 120, 296 120" marker-end="url(#ar)"/>
+  <path class="ln" d="M422 110 C 460 100, 480 70, 516 60" marker-end="url(#ar)"/>
+</svg>
+<figcaption>图 6-6　元素露出四分之一时开始淡入，之后不再观察</figcaption>
+</figure>
+
+<div class="box new">
+  <div class="t">&#10024; 纯 CSS：滚动驱动动画</div>
+  <p>
+    CSS 的 <code>animation-timeline: view()</code> 可以把动画进度直接绑定到「元素在视口中的位置」，不需要任何 JS。
+    Chrome/Edge 115+ 与 Safari 26 已支持，Firefox 尚未正式发布。<span class="bl limited">有限支持</span> 不支持的浏览器会直接显示最终状态，可作为渐进增强使用：
+  </p>
+  <div class="code" data-lang="css">
+<script type="text/plain">
+@keyframes fade-in { from { opacity: 0; translate: 0 40px; } }
+
+img.animate {
+  animation: fade-in linear both;
+  animation-timeline: view();          /* 进度 = 元素穿过视口的程度 */
+  animation-range: entry 0% entry 60%; /* 只在「进入」阶段播放 */
+}
+</script>
+  </div>
+</div>
+
+<h2 id="r6-7"><span class="rn">6.7</span>无限滚动</h2>
+
+<p class="prob">用户滚到列表底部时自动加载更多数据，不需要点「加载更多」按钮。</p>
+
+<p>
+  在列表末尾放一个「哨兵」元素（sentinel），观察它。哨兵一进入视口，说明用户快滚到底了，就加载下一页：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="无限滚动：观察列表末尾的哨兵元素">
+  <rect class="bx-d" x="40" y="20" width="240" height="210" rx="10"/>
+  <rect class="bx" x="60" y="34" width="200" height="30" rx="5"/><text class="sm" x="160" y="54" text-anchor="middle">第 1 条</text>
+  <rect class="bx" x="60" y="70" width="200" height="30" rx="5"/><text class="sm" x="160" y="90" text-anchor="middle">……</text>
+  <rect class="bx" x="60" y="106" width="200" height="30" rx="5"/><text class="sm" x="160" y="126" text-anchor="middle">第 20 条</text>
+  <rect class="bx-a" x="60" y="146" width="200" height="30" rx="5"/><text class="sm on-a" x="160" y="166" text-anchor="middle">⏳ 哨兵：加载中…</text>
+  <rect class="bx-a" x="30" y="92" width="260" height="100" rx="6" style="fill:none;stroke-width:3"/>
+  <text class="sm on-a" x="296" y="110">视口</text>
+
+  <path class="ln-a" d="M262 161 H340" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="344" y="140" width="170" height="44" rx="8"/>
+  <text class="mono on-a" x="429" y="160" text-anchor="middle">isIntersecting</text>
+  <text class="sm" x="429" y="176" text-anchor="middle">哨兵露面了</text>
+  <path class="ln" d="M516 162 H556" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="560" y="140" width="180" height="44" rx="8"/>
+  <text class="mono on-g" x="650" y="160" text-anchor="middle">loadMore()</text>
+  <text class="sm" x="650" y="176" text-anchor="middle">请求第 2 页，追加到列表</text>
+  <path class="ln-g" d="M650 138 V60 H300" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="470" y="52" text-anchor="middle">新数据插在哨兵之前，哨兵被推到下方</text>
+</svg>
+<figcaption>图 6-7　哨兵永远在列表最后，它一露面就说明该加载了</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="6-09-infinite-scroll.js">
+<script type="text/plain">
+/**
+ * 观察「加载更多」占位元素，它可见时加载更多数据
+ * @param placeholder 占位（哨兵）元素
+ * @param loadMore 加载数据的函数
+ */
+function observeForInfiniteScroll(placeholder, loadMore) {
+  const observer = new IntersectionObserver(entries => {
+    // 哨兵可见 = 用户滚到底了
+    if (entries[0].isIntersecting) {
+      loadMore();
+    }
+  });
+
+  observer.observe(placeholder);
+}
+</script>
+</div>
+
+<p>
+  哨兵可以是一个转圈的加载图标：默认 threshold 为 0，哨兵刚露出一个像素时回调就触发了，等用户真正看到转圈时数据已经在加载，
+  所以这个加载图标是「真实」的。另外，列表为空时哨兵一开始就可见，于是第一页数据也会被自动加载。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 实战中要补上的两个细节</div>
+  <ol>
+    <li><strong>防止重复加载</strong>：请求还没回来时，哨兵可能再次触发（比如用户上下滚动）。用一个 <code>loading</code> 标志挡住。</li>
+    <li><strong>加载完哨兵仍然可见</strong>：如果一页数据太少，追加后哨兵依然在视口里，但「相交状态」没有变化，观察者<strong>不会再次通知</strong>，列表就卡住了。
+      解决办法是加载完后 <code>unobserve</code> 再 <code>observe</code> 一次，强制重新报告当前状态。</li>
+  </ol>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+function observeForInfiniteScroll(sentinel, loadMore) {
+  let loading = false;
+  const observer = new IntersectionObserver(async entries => {
+    if (!entries[0].isIntersecting || loading) return;
+    loading = true;
+    const hasMore = await loadMore();     // 约定：返回是否还有更多数据
+    loading = false;
+    observer.unobserve(sentinel);
+    if (hasMore) observer.observe(sentinel);   // 重新观察，触发一次新的状态报告
+    else sentinel.textContent = '没有更多了';
+  }, { rootMargin: '200px' });            // 提前 200px 开始加载
+  observer.observe(sentinel);
+}
+</script>
+  </div>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：在盒子里向下滚动</div>
+  <div class="b">
+    <div class="inf-list" id="inf-root"><div class="sentinel" id="inf-sentinel">⏳ 加载中…</div></div>
+    <p class="hint">每次模拟 600ms 的网络延迟，最多加载 5 页。</p>
+  </div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>三种观察者用法一致：<code>new</code> 时传回调，<code>observe</code> 指定目标，回调收到 entries 数组，用完 <code>unobserve / disconnect</code>。</li>
+  <li>IntersectionObserver：<code>threshold</code> 控制触发比例，<code>rootMargin</code> 扩大或缩小判定区域，<code>root</code> 指定滚动容器。</li>
+  <li>MutationObserver：用 <code>childList / attributes / characterData / subtree</code> 选择观察范围。</li>
+  <li>ResizeObserver：回调里不要改变被观察元素的尺寸，避免循环。</li>
+  <li>能用 HTML / CSS 解决的先用它们：<code>loading="lazy"</code>、容器查询、Grid 高度过渡、滚动驱动动画；JS 观察者用于需要逻辑的场景。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个「曝光统计」：文章里的每个广告位露出 50% 且停留超过 1 秒时，记录一次曝光（提示：进入时开定时器，离开时清除）。</li>
+    <li>给一篇长文章做「阅读目录高亮」：观察每个 <code>h2</code>，当前在视口中的章节在侧边栏里高亮。</li>
+    <li>用 MutationObserver 监听 <code>document.body</code> 的 <code>subtree</code> 与 <code>childList</code>，统计页面上新插入了多少个 <code>&lt;img&gt;</code>，并自动给它们加上 <code>loading="lazy"</code>。</li>
+    <li>用 ResizeObserver + Canvas 画一个会随容器宽度自动重绘的折线图。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // ---- IntersectionObserver 比例 ----
+  var target = document.getElementById('io-target'), ioOut = document.getElementById('io-out');
+  var th = []; for (var i = 0; i <= 20; i++) th.push(i / 20);
+  new IntersectionObserver(function (entries) {
+    var e = entries[0];
+    target.classList.toggle('on', e.isIntersecting);
+    target.textContent = 'ratio = ' + e.intersectionRatio.toFixed(2);
+    ioOut.textContent = 'isIntersecting = ' + e.isIntersecting + '    intersectionRatio = ' + e.intersectionRatio.toFixed(2);
+  }, { root: document.getElementById('io-root'), threshold: th }).observe(target);
+
+  // ---- ResizeObserver ----
+  var rs = document.getElementById('rs-box');
+  new ResizeObserver(function (entries) {
+    var w = Math.round(entries[0].contentRect.width);
+    rs.textContent = '我的内容宽度是 ' + w + 'px' + (w > 380 ? ' —— 已经够宽，显示更多信息 ✨' : '');
+  }).observe(rs);
+
+  // ---- MutationObserver ----
+  var list = document.getElementById('mo-list'), moOut = document.getElementById('mo-out'), n = 0;
+  var fruits = ['橙子', '葡萄', '西瓜', '芒果', '桃子', '梨'];
+  new MutationObserver(function (records) {
+    moOut.textContent = records.map(function (r) {
+      var s = 'type: ' + r.type;
+      if (r.type === 'childList') s += '   added: ' + r.addedNodes.length + '   removed: ' + r.removedNodes.length;
+      if (r.type === 'attributes') s += '   attributeName: ' + r.attributeName + '   oldValue: ' + JSON.stringify(r.oldValue);
+      if (r.type === 'characterData') s += '   oldValue: ' + JSON.stringify(r.oldValue);
+      return s;
+    }).join('\n') + '\n\n（同一时刻的多个变化会合并成一次回调）';
+  }).observe(list, { childList: true, attributes: true, attributeOldValue: true, characterData: true, characterDataOldValue: true, subtree: true });
+  document.getElementById('mo-add').onclick = function () { var li = document.createElement('li'); li.textContent = fruits[n++ % fruits.length]; list.append(li); };
+  document.getElementById('mo-remove').onclick = function () { if (list.lastElementChild) list.lastElementChild.remove(); };
+  document.getElementById('mo-class').onclick = function () { list.classList.toggle('highlight'); };
+  document.getElementById('mo-text').onclick = function () { var f = list.firstElementChild; if (f && f.firstChild) f.firstChild.data = f.firstChild.data + '!'; };
+
+  // ---- 无限滚动 ----
+  var root = document.getElementById('inf-root'), sentinel = document.getElementById('inf-sentinel');
+  var page = 0, loading = false;
+  function loadMore() {
+    return new Promise(function (res) {
+      setTimeout(function () {
+        page++;
+        for (var i = 1; i <= 6; i++) {
+          var d = document.createElement('div'); d.className = 'item';
+          d.textContent = '第 ' + page + ' 页 · 第 ' + i + ' 条';
+          root.insertBefore(d, sentinel);
+        }
+        res(page < 5);
+      }, 600);
+    });
+  }
+  var io = new IntersectionObserver(function (entries) {
+    if (!entries[0].isIntersecting || loading) return;
+    loading = true;
+    loadMore().then(function (more) {
+      loading = false;
+      io.unobserve(sentinel);
+      if (more) io.observe(sentinel); else sentinel.textContent = '— 没有更多了 —';
+    });
+  }, { root: root, rootMargin: '40px' });
+  io.observe(sentinel);
+})();
+</script>
+</body>
+</html>

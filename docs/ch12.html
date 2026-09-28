@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 12 章 · Web Components — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  x-disclosure:not(:defined), profile-card:not(:defined) { display: none; }
+  .demo profile-card { margin: 8px 0; }
+</style>
+</head>
+<body data-chapter="12">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 12 章</span>
+<h1>Web Components</h1>
+<p class="lede">
+  React、Vue 这些框架都有「组件」的概念。其实浏览器本身也有：<strong>Web Components</strong> 让你定义全新的 HTML 标签，
+  比如 <code>&lt;profile-card&gt;</code>，它自带结构、样式和行为，可以在任何页面、任何框架里使用，而且不依赖任何库。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解 Web Components 的三大支柱：自定义元素、Shadow DOM、模板与插槽</li>
+    <li>掌握生命周期回调与 <code>observedAttributes</code></li>
+    <li>用插槽（slot）把外部内容「投影」进组件</li>
+    <li>从组件内部派发自定义事件，并让它穿过 Shadow DOM 边界</li>
+    <li>完成日期、反馈、名片、懒加载图片、折叠面板、按钮六个组件，了解声明式 Shadow DOM、表单关联等现代能力</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">三大支柱</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="Web Components 由自定义元素、Shadow DOM、模板与插槽组成">
+  <rect class="bx-a" x="20" y="20" width="230" height="150" rx="12"/>
+  <text class="ttl on-a" x="135" y="46" text-anchor="middle">自定义元素</text>
+  <text class="sm" x="135" y="66" text-anchor="middle">Custom Elements</text>
+  <text class="mono" x="40" y="96">class X extends</text>
+  <text class="mono" x="40" y="114">  HTMLElement { … }</text>
+  <text class="mono" x="40" y="140">customElements</text>
+  <text class="mono" x="40" y="158">  .define('x-y', X)</text>
+
+  <rect class="bx-b" x="265" y="20" width="230" height="150" rx="12"/>
+  <text class="ttl on-b" x="380" y="46" text-anchor="middle">Shadow DOM</text>
+  <text class="sm" x="380" y="66" text-anchor="middle">封装的内部 DOM</text>
+  <text class="sm" x="380" y="96" text-anchor="middle">内部样式不外泄</text>
+  <text class="sm" x="380" y="116" text-anchor="middle">外部样式进不来</text>
+  <text class="mono" x="380" y="146" text-anchor="middle">this.attachShadow(…)</text>
+
+  <rect class="bx-g" x="510" y="20" width="230" height="150" rx="12"/>
+  <text class="ttl on-g" x="625" y="46" text-anchor="middle">模板与插槽</text>
+  <text class="sm" x="625" y="66" text-anchor="middle">&lt;template&gt; · &lt;slot&gt;</text>
+  <text class="sm" x="625" y="96" text-anchor="middle">模板：可复制的 HTML 片段</text>
+  <text class="sm" x="625" y="116" text-anchor="middle">插槽：留给使用者填内容的「坑」</text>
+  <text class="mono" x="625" y="146" text-anchor="middle">&lt;slot name="title"&gt;</text>
+
+  <rect class="bx-d" x="20" y="186" width="720" height="34" rx="8"/>
+  <text class="sm" x="380" y="208" text-anchor="middle">三者可以单独使用，组合起来就是一个完整的、可复用的「自定义 HTML 标签」</text>
+</svg>
+<figcaption>图 12-1　Web Components 的三个组成部分</figcaption>
+</figure>
+
+<h3>创建与注册</h3>
+
+<div class="code" data-lang="js" data-file="12-01 / 12-02">
+<script type="text/plain">
+class MyComponent extends HTMLElement {
+  connectedCallback() {
+    this.textContent = 'Hello from MyComponent';
+  }
+}
+
+// 注册：标签名 → 类
+customElements.define('my-component', MyComponent);
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="12-03-using-custom-element.html">
+<script type="text/plain">
+<my-component></my-component>
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 三条硬性规定</div>
+  <ul>
+    <li>名字<strong>必须包含连字符</strong>（<code>my-component</code>，不能是 <code>mycomponent</code>），这样永远不会与未来的原生标签冲突。</li>
+    <li>必须写<strong>闭合标签</strong>：<code>&lt;my-component&gt;&lt;/my-component&gt;</code>，不能自闭合。</li>
+    <li>同一个名字只能 <code>define</code> 一次，重复注册会抛异常。不确定时先检查：<code>if (!customElements.get('my-component')) { … }</code>。</li>
+  </ul>
+</div>
+
+<h3>生命周期回调</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="自定义元素的生命周期">
+  <rect class="bx" x="20" y="70" width="140" height="56" rx="10"/>
+  <text class="mono" x="90" y="94" text-anchor="middle">constructor()</text>
+  <text class="sm" x="90" y="112" text-anchor="middle">创建实例</text>
+  <path class="ln" d="M162 98 H206" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="210" y="70" width="180" height="56" rx="10"/>
+  <text class="mono on-g" x="300" y="94" text-anchor="middle">connectedCallback()</text>
+  <text class="sm" x="300" y="112" text-anchor="middle">插入到文档中</text>
+  <path class="ln" d="M392 98 H436" marker-end="url(#ar)"/>
+  <rect class="bx-r" x="440" y="70" width="190" height="56" rx="10"/>
+  <text class="mono on-r" x="535" y="94" text-anchor="middle">disconnectedCallback()</text>
+  <text class="sm" x="535" y="112" text-anchor="middle">从文档中移除 → 做清理</text>
+  <path class="ln-d" d="M535 128 V150 H300 V128" marker-end="url(#ar)"/>
+  <text class="sm" x="418" y="166" text-anchor="middle">再次插入会再次调用 connectedCallback（可能多次！）</text>
+
+  <rect class="bx-p" x="210" y="10" width="300" height="40" rx="10"/>
+  <text class="mono on-p" x="360" y="35" text-anchor="middle">attributeChangedCallback(name, old, new)</text>
+  <path class="ln-p" d="M360 52 V68" marker-end="url(#ar-p)"/>
+  <text class="sm on-p" x="520" y="35">只对 observedAttributes 中的属性触发</text>
+
+  <text class="sm" x="20" y="200">constructor 里：初始化状态、attachShadow；不要读属性或子元素（它们可能还不存在）。</text>
+  <text class="sm" x="660" y="94">另有 adopted</text>
+  <text class="sm" x="660" y="112">Callback（换文档）</text>
+</svg>
+<figcaption>图 12-2　自定义元素的生命周期</figcaption>
+</figure>
+
+<h3>模板与插槽</h3>
+
+<p>
+  <code>&lt;template&gt;</code> 里的 HTML 不会被渲染，只是一份「模具」，需要时用 <code>template.content.cloneNode(true)</code> 复制出来。
+  模板本身没有数据绑定、变量插值或逻辑，只提供初始结构，动态的部分由你在 JS 里设置。
+  <code>&lt;slot&gt;</code> 是模板中的<strong>占位符</strong>，使用组件的人往里「塞」内容：
+</p>
+
+<div class="vs">
+  <div class="new"><div class="h">组件内部模板</div>
+    <div class="code" data-lang="html" data-file="12-04-template-with-slots.html">
+<script type="text/plain">
+<template>
+  <h2><slot name="name"></slot></h2>
+  <slot></slot>
+</template>
+</script>
+    </div>
+  </div>
+  <div class="old"><div class="h">使用者这样写</div>
+    <div class="code" data-lang="html" data-file="12-05-slot-content.html">
+<script type="text/plain">
+<author-bio>
+  <span slot="name">John Doe</span>
+  <p>John is a great author who has
+     written many books.</p>
+</author-bio>
+</script>
+    </div>
+  </div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="插槽把使用者提供的子元素投影到 Shadow DOM 中的位置">
+  <rect class="bx" x="20" y="20" width="300" height="210" rx="10"/>
+  <text class="ttl" x="170" y="42" text-anchor="middle">Light DOM（使用者写的）</text>
+  <text class="mono" x="36" y="70">&lt;author-bio&gt;</text>
+  <rect class="bx-a" x="50" y="82" width="250" height="32" rx="6"/>
+  <text class="mono on-a" x="60" y="103">&lt;span slot="name"&gt;John…</text>
+  <rect class="bx-b" x="50" y="124" width="250" height="52" rx="6"/>
+  <text class="mono on-b" x="60" y="145">&lt;p&gt;John is a great</text>
+  <text class="mono on-b" x="60" y="164">   author…&lt;/p&gt;</text>
+  <text class="mono" x="36" y="204">&lt;/author-bio&gt;</text>
+
+  <rect class="bx-d" x="440" y="20" width="300" height="210" rx="10"/>
+  <text class="ttl" x="590" y="42" text-anchor="middle">Shadow DOM（组件模板）</text>
+  <text class="mono" x="456" y="76">&lt;h2&gt;</text>
+  <rect class="bx-a" x="476" y="86" width="240" height="32" rx="6" style="stroke-dasharray:4 3"/>
+  <text class="mono on-a" x="486" y="107">&lt;slot name="name"&gt;</text>
+  <text class="mono" x="456" y="136">&lt;/h2&gt;</text>
+  <rect class="bx-b" x="476" y="150" width="240" height="32" rx="6" style="stroke-dasharray:4 3"/>
+  <text class="mono on-b" x="486" y="171">&lt;slot&gt;（默认插槽）</text>
+  <text class="sm" x="590" y="212" text-anchor="middle">虚线框：内容「显示」在这里</text>
+
+  <path class="ln-a" d="M302 98 C 370 98, 400 102, 472 102" marker-end="url(#ar-a)"/>
+  <path class="ln-b" d="M302 150 C 370 150, 400 166, 472 166" marker-end="url(#ar-b)"/>
+  <text class="sm on-a" x="380" y="88" text-anchor="middle">slot 属性匹配</text>
+  <text class="sm on-b" x="380" y="190" text-anchor="middle">没写 slot 的</text>
+  <text class="sm on-b" x="380" y="206" text-anchor="middle">进默认插槽</text>
+</svg>
+<figcaption>图 12-3　插槽是「投影」：内容仍属于 Light DOM，只是显示在 Shadow DOM 的指定位置</figcaption>
+</figure>
+
+<h3>Shadow DOM 与 Light DOM</h3>
+
+<p>
+  <strong>Shadow DOM</strong> 是挂在元素上的一棵独立 DOM 子树，与页面的主 DOM 隔离。最大的好处是<strong>样式作用域</strong>：
+  Shadow DOM 内定义的样式只作用于内部元素；页面的全局样式也作用不到里面。这种隔离是<strong>双向</strong>的。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="Shadow DOM 的样式边界">
+  <rect class="bx" x="20" y="20" width="720" height="200" rx="12"/>
+  <text class="ttl" x="36" y="44">页面（全局 CSS：button { background: red }）</text>
+  <rect class="bx-r" x="40" y="60" width="140" height="40" rx="8"/>
+  <text class="sm on-r" x="110" y="85" text-anchor="middle">页面上的 button：红色</text>
+
+  <rect class="bx-b" x="230" y="60" width="490" height="146" rx="10" style="stroke-width:2.5"/>
+  <text class="ttl on-b" x="246" y="82">&lt;feedback-rating&gt; 的 Shadow DOM</text>
+  <text class="mono" x="246" y="106">&lt;style&gt; button { padding: .5em 1em } &lt;/style&gt;</text>
+  <rect class="bx" x="246" y="118" width="160" height="36" rx="8"/>
+  <text class="sm" x="326" y="141" text-anchor="middle">内部 button：不是红色</text>
+  <text class="sm" x="420" y="136">全局的 button 规则被挡在边界外</text>
+  <text class="sm" x="420" y="152">内部的 button 规则也不会影响页面</text>
+  <text class="sm on-g" x="246" y="182">✓ 可以穿过边界的：继承属性（color、font…）、CSS 自定义属性 --var、</text>
+  <text class="sm on-g" x="246" y="198">   ::part() 暴露出来的部件、::slotted() 对插槽内容的有限控制</text>
+</svg>
+<figcaption>图 12-4　Shadow DOM 的边界挡住了普通选择器，但不挡继承和 CSS 变量</figcaption>
+</figure>
+
+<ul>
+  <li><strong>open / closed</strong>：<code>attachShadow({ mode: 'open' })</code> 时外部可以通过 <code>element.shadowRoot</code> 访问内部；<code>closed</code> 时 <code>shadowRoot</code> 为 <code>null</code>。一般用 <code>open</code> 即可，closed 并不能真正防止别人访问。</li>
+  <li><strong>Light DOM</strong>：组件的普通子元素（包括被投影到插槽中的内容）。它们不在 Shadow DOM 里，所以<strong>全局样式对它们有效</strong>。</li>
+  <li>Shadow DOM 是可选的。不用它也可以写自定义元素（直接操作 <code>this</code> 的子元素），只是没有样式隔离。</li>
+</ul>
+
+<h2 id="r12-1"><span class="rn">12.1</span>显示今天日期的组件</h2>
+
+<p class="prob">做一个组件，按浏览器语言格式化并显示今天的日期。</p>
+
+<div class="code" data-lang="js" data-file="12-06-todays-date.js">
+<script type="text/plain">
+class TodaysDate extends HTMLElement {
+  connectedCallback() {
+    const formatter = new Intl.DateTimeFormat(navigator.language, { dateStyle: 'full' });
+    this.textContent = formatter.format(new Date());
+  }
+}
+
+customElements.define('todays-date', TodaysDate);
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="12-07-show-todays-date.html">
+<script type="text/plain">
+<p>
+  Today's date is: <todays-date></todays-date>
+</p>
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">实时效果（本页真的注册了这个组件）</div>
+  <div class="b"><p style="margin:0">今天是：<todays-date></todays-date></p></div>
+</div>
+
+<p>元素进入 DOM 时，浏览器调用 <code>connectedCallback</code>，它用第 11 章的 <code>Intl.DateTimeFormat</code> 格式化当前日期，写入 <code>textContent</code>。</p>
+
+<h2 id="r12-2"><span class="rn">12.2</span>格式化任意日期的组件</h2>
+
+<p class="prob">让组件接受一个 <code>date</code> 属性，显示格式化后的日期；属性改变时自动更新。</p>
+
+<div class="code" data-lang="js" data-file="12-08-custom-date-component.js">
+<script type="text/plain">
+class DateFormatter extends HTMLElement {
+  // 只有列在这里的属性变化时，浏览器才会调用 attributeChangedCallback
+  static observedAttributes = ['date'];
+
+  constructor() {
+    super();   // 必须先调用 super()
+    // 在这里创建格式器，避免每次日期变化都重新创建
+    this.formatter = new Intl.DateTimeFormat(navigator.language, { dateStyle: 'full' });
+  }
+
+  /** 根据当前 date 属性格式化日期 */
+  formatDate() {
+    if (this.hasAttribute('date')) {
+      this.textContent = this.formatter.format(new Date(this.getAttribute('date')));
+    } else {
+      this.textContent = '';   // 没有 date 就什么都不显示
+    }
+  }
+
+  attributeChangedCallback() {
+    // 只观察了一个属性，所以一定是 date 变了
+    this.formatDate();
+  }
+
+  connectedCallback() {
+    this.formatDate();
+  }
+}
+
+customElements.define('date-formatter', DateFormatter);
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="12-09-using-date.html">
+<script type="text/plain">
+<date-formatter date="2023-10-16T03:52:49.955Z"></date-formatter>
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="属性变化触发 attributeChangedCallback 的条件">
+  <rect class="bx" x="20" y="50" width="200" height="50" rx="8"/>
+  <text class="mono" x="120" y="72" text-anchor="middle">el.setAttribute(</text>
+  <text class="mono" x="120" y="90" text-anchor="middle">'date', '2026-01-01')</text>
+  <path class="ln" d="M222 75 H270" marker-end="url(#ar)"/>
+  <polygon points="360,35 450,75 360,115 270,75" style="fill:var(--panel);stroke:var(--line-2);stroke-width:1.5"/>
+  <text class="sm" x="360" y="72" text-anchor="middle">在 observed</text>
+  <text class="sm" x="360" y="88" text-anchor="middle">Attributes 里？</text>
+  <path class="ln-g" d="M450 75 H500" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="475" y="66" text-anchor="middle">是</text>
+  <rect class="bx-g" x="504" y="50" width="236" height="50" rx="8"/>
+  <text class="mono on-g" x="622" y="72" text-anchor="middle">attributeChangedCallback</text>
+  <text class="mono on-g" x="622" y="90" text-anchor="middle">('date', 旧值, 新值)</text>
+  <path class="ln-r" d="M360 115 V135 H420"/>
+  <text class="sm on-r" x="426" y="139">否 → 什么都不发生</text>
+</svg>
+<figcaption>图 12-5　observedAttributes 是一张「白名单」</figcaption>
+</figure>
+
+<p>
+  如果元素在 HTML 中一开始就带有被观察的属性，<code>attributeChangedCallback</code> 会在 <code>connectedCallback</code> <strong>之前</strong>就被调用一次。
+  回调的三个参数依次是属性名、旧值、新值；属性被删除时新值为 <code>null</code>。
+</p>
+
+<div class="demo">
+  <div class="h">试一试：修改 date 属性</div>
+  <div class="b">
+    <div class="row"><input type="date" id="df-input" value="2023-10-16"> <span class="hint">→ setAttribute('date', …)</span></div>
+    <p style="margin:8px 0 0">结果：<date-formatter id="df" date="2023-10-16"></date-formatter></p>
+  </div>
+</div>
+
+<h2 id="r12-3"><span class="rn">12.3</span>反馈组件</h2>
+
+<p class="prob">做一个可复用的「这篇内容有帮助吗？」组件，用户点击后通知页面。</p>
+
+<div class="code" data-lang="js" data-file="12-10-template.js">
+<script type="text/plain">
+const template = document.createElement('template');
+template.innerHTML = `
+  <style>
+    .feedback-prompt {
+      display: flex;
+      align-items: center;
+      gap: 0.5em;
+    }
+    button {
+      padding: 0.5em 1em;
+    }
+  </style>
+  <div class="feedback-prompt">
+    <p>Was this helpful?</p>
+    <button type="button" data-helpful="true">Yes</button>
+    <button type="button" data-helpful="false">No</button>
+  </div>
+`;
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="12-11-implementation.js">
+<script type="text/plain">
+class FeedbackRating extends HTMLElement {
+  constructor() {
+    super();
+    // 创建 Shadow DOM，把模板复制进去
+    const shadowRoot = this.attachShadow({ mode: 'open' });
+    shadowRoot.appendChild(template.content.cloneNode(true));
+  }
+
+  connectedCallback() {
+    // 事件委托：只在容器上监听一次，而不是每个按钮都监听
+    this.shadowRoot.querySelector('.feedback-prompt').addEventListener('click', event => {
+      const { helpful } = event.target.dataset;
+      if (typeof helpful !== 'undefined') {
+        // 用户选择后，隐藏按钮并显示感谢语
+        this.shadowRoot.querySelector('.feedback-prompt').remove();
+        this.shadowRoot.textContent = 'Thanks for your feedback!';
+
+        // JS 没有 parseBoolean，手动把字符串转成布尔值
+        this.helpful = helpful === 'true';
+
+        // 派发自定义事件，通知外部
+        this.shadowRoot.dispatchEvent(new CustomEvent('feedback', {
+          composed: true,  // 允许事件穿出 Shadow DOM 边界
+          bubbles: true    // 允许事件沿 DOM 树向上冒泡
+        }));
+      }
+    });
+  }
+}
+
+customElements.define('feedback-rating', FeedbackRating);
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="12-12 / 12-13">
+<script type="text/plain">
+// HTML：<feedback-rating></feedback-rating>
+
+document.querySelector('feedback-rating').addEventListener('feedback', event => {
+  // event.target 是组件本身，读取它的 helpful 属性
+  fetch('/api/analytics/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ helpful: event.target.helpful }),
+    headers: { 'Content-Type': 'application/json' }
+  });
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="自定义事件从 Shadow DOM 中冒泡到文档">
+  <rect class="bx" x="20" y="16" width="720" height="210" rx="12"/>
+  <text class="mono" x="36" y="40">document</text>
+  <rect class="bx" x="50" y="52" width="670" height="160" rx="10"/>
+  <text class="mono" x="66" y="74">&lt;feedback-rating&gt;  ← 外部监听器挂在这里</text>
+  <rect class="bx-b" x="80" y="86" width="620" height="112" rx="10" style="stroke-width:2.5"/>
+  <text class="mono on-b" x="96" y="108">#shadow-root</text>
+  <rect class="bx-a" x="110" y="124" width="260" height="56" rx="8"/>
+  <text class="mono on-a" x="240" y="146" text-anchor="middle">dispatchEvent(</text>
+  <text class="mono on-a" x="240" y="166" text-anchor="middle">new CustomEvent('feedback'))</text>
+  <path class="ln-g" d="M370 140 C 480 140, 520 80, 560 70" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="560" y="126">composed: true → 穿出边界</text>
+  <text class="sm on-g" x="560" y="142">bubbles: true → 继续向上</text>
+  <text class="sm on-r" x="400" y="186">两者缺一，外部的监听器都收不到</text>
+  <text class="sm" x="730" y="40" text-anchor="end">穿出边界后 event.target 被「重定向」为宿主元素</text>
+</svg>
+<figcaption>图 12-6　composed + bubbles 让自定义事件抵达外部</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">试一试：点击按钮，页面收到 feedback 事件</div>
+  <div class="b">
+    <feedback-rating id="fb"></feedback-rating>
+    <div class="out" id="fb-out" style="min-height:0">等待 feedback 事件……</div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 更地道的写法：从宿主元素派发，并用 detail 传数据</div>
+  <p>
+    在宿主（<code>this</code>）上派发事件就不需要 <code>composed</code>，数据放进 <code>detail</code>，外部从 <code>event.detail</code> 读取，
+    比在元素上挂一个 <code>helpful</code> 属性更清晰：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+this.dispatchEvent(new CustomEvent('feedback', {
+  bubbles: true,
+  detail: { helpful: helpful === 'true' }
+}));
+
+// 外部
+el.addEventListener('feedback', e => console.log(e.detail.helpful));
+</script>
+  </div>
+</div>
+
+<h2 id="r12-4"><span class="rn">12.4</span>个人名片组件</h2>
+
+<p class="prob">做一个可复用的名片卡片组件，照片、姓名、职位、简介分别放在固定的位置。</p>
+
+<div class="code" data-lang="js" data-file="12-14-template.js">
+<script type="text/plain">
+const template = document.createElement('template');
+template.innerHTML = `
+  <style>
+    :host {                       /* :host = 组件元素自身 */
+      display: grid;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      padding: 8px;
+      grid-template-columns: auto 1fr;
+      column-gap: 16px;
+      align-items: center;
+      margin: 1rem;
+    }
+    .photo {
+      border-radius: 50%;
+      grid-row: 1 / span 3;       /* 照片占左侧三行 */
+    }
+    .name  { font-size: 2rem; font-weight: bold; }
+    .title { font-weight: bold; }
+  </style>
+  <div class="photo"><slot name="photo"></slot></div>
+  <div class="name"><slot name="name"></slot></div>
+  <div class="title"><slot name="title"></slot></div>
+  <div class="bio"><slot></slot></div>
+`;
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="12-15-implementation.js">
+<script type="text/plain">
+class ProfileCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.appendChild(template.content.cloneNode(true));
+  }
+}
+
+customElements.define('profile-card', ProfileCard);
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="12-16-usage.html">
+<script type="text/plain">
+<profile-card>
+  <img slot="photo" src="/api/portraits/chavez.jpg" />
+  <div slot="name">Phillip Chavez</div>
+  <div slot="title">CEO</div>
+  <p>Philip is a great CEO.</p>
+</profile-card>
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 -8 760 178" role="img" aria-label="名片组件的网格布局">
+  <rect class="bx" x="140" y="16" width="480" height="140" rx="8"/>
+  <text class="sm" x="146" y="12">:host { display: grid; grid-template-columns: auto 1fr }</text>
+  <circle cx="210" cy="86" r="50" class="bx-a" style="fill:var(--accent-bg);stroke:var(--accent);stroke-width:1.5"/>
+  <text class="sm on-a" x="210" y="82" text-anchor="middle">slot="photo"</text>
+  <text class="sm" x="210" y="98" text-anchor="middle">占 3 行</text>
+  <rect class="bx-b" x="280" y="28" width="320" height="36" rx="6"/><text class="lbl on-b" x="296" y="51">slot="name"（2rem 加粗）</text>
+  <rect class="bx-g" x="280" y="70" width="320" height="30" rx="6"/><text class="sm on-g" x="296" y="90">slot="title"（加粗）</text>
+  <rect class="bx-p" x="280" y="106" width="320" height="40" rx="6"/><text class="sm on-p" x="296" y="130">默认插槽：简介</text>
+</svg>
+<figcaption>图 12-7　名片组件的布局与插槽位置</figcaption>
+</figure>
+
+<div class="demo">
+  <div class="h">实时效果</div>
+  <div class="b">
+    <profile-card>
+      <svg slot="photo" width="72" height="72" viewBox="0 0 72 72" aria-hidden="true"><circle cx="36" cy="36" r="36" fill="#d95602"/><text x="36" y="45" text-anchor="middle" font-size="26" fill="#fff" font-family="sans-serif">PC</text></svg>
+      <div slot="name">Phillip Chavez</div>
+      <div slot="title">CEO</div>
+      <p style="margin:0">Philip is a great CEO.（这段文字在 Light DOM 中，所以它使用的是本页的全局字体样式）</p>
+    </profile-card>
+  </div>
+</div>
+
+<p>
+  <code>:host</code> 选择器代表组件的<strong>宿主元素</strong>（即 <code>&lt;profile-card&gt;</code> 本身）。
+  还可以写 <code>:host([variant="dark"])</code> 根据宿主的属性切换样式，用 <code>::slotted(img)</code> 为插进来的元素设置样式。
+</p>
+
+<h2 id="r12-5"><span class="rn">12.5</span>懒加载图片组件</h2>
+
+<p class="prob">做一个图片组件，图片滚动到视口内才开始加载。</p>
+
+<p>把第 6 章 6.1 节的方案封装进组件：</p>
+
+<div class="code" data-lang="js" data-file="12-17-lazy-image-component.js">
+<script type="text/plain">
+class LazyImage extends HTMLElement {
+  constructor() {
+    super();
+    const shadowRoot = this.attachShadow({ mode: 'open' });
+    this.image = document.createElement('img');
+    shadowRoot.appendChild(this.image);
+  }
+
+  connectedCallback() {
+    this.observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) {
+        this.image.src = this.getAttribute('src');
+        this.observer.disconnect();
+      }
+    });
+    this.observer.observe(this);   // 观察组件自身
+  }
+
+  // 补充：元素被移除时也要断开观察，避免泄漏
+  disconnectedCallback() {
+    this.observer?.disconnect();
+  }
+}
+
+customElements.define('lazy-image', LazyImage);
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="12-18-usage.html">
+<script type="text/plain">
+<lazy-image src="https://placekitten.com/200/138"></lazy-image>
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 两点说明</div>
+  <ul>
+    <li>原书说这个例子「扩展了内置元素」，其实它是一个<strong>独立的</strong>自定义元素（继承 <code>HTMLElement</code>，内部包着一个 <code>&lt;img&gt;</code>），而不是继承 <code>HTMLImageElement</code> 的「定制内置元素」（<code>&lt;img is="lazy-img"&gt;</code>）。后者 Safari 不支持，一般不推荐。</li>
+    <li>正如第 6 章所说，单纯的懒加载直接用 <code>&lt;img loading="lazy"&gt;</code> 即可。这个组件的价值在于演示「如何把一段行为封装成标签」。</li>
+  </ul>
+</div>
+
+<h2 id="r12-6"><span class="rn">12.6</span>折叠面板（Disclosure）组件</h2>
+
+<p class="prob">点击按钮展开或收起一段内容，比如表单里默认折叠的「高级设置」；也可以通过 <code>open</code> 属性用代码控制。</p>
+
+<div class="code" data-lang="js" data-file="12-19-template.js">
+<script type="text/plain">
+const template = document.createElement('template');
+template.innerHTML = `
+  <div>
+    <button type="button" class="toggle-button">
+      <slot name="title"></slot>
+    </button>
+    <div class="content">
+      <slot></slot>
+    </div>
+  </div>
+`;
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="12-20-disclosure.js">
+<script type="text/plain">
+class Disclosure extends HTMLElement {
+  // 观察 open 属性
+  static observedAttributes = ['open'];
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.appendChild(template.content.cloneNode(true));
+    this.content = this.shadowRoot.querySelector('.content');
+  }
+
+  connectedCallback() {
+    this.content.hidden = !this.hasAttribute('open');
+
+    this.shadowRoot.querySelector('.toggle-button').addEventListener('click', () => {
+      if (this.hasAttribute('open')) {
+        // 当前展开：移除 open 并隐藏内容
+        this.removeAttribute('open');
+        this.content.hidden = true;
+      } else {
+        // 当前收起：加上 open 并显示内容
+        this.setAttribute('open', '');
+        this.content.hidden = false;
+      }
+    });
+  }
+
+  attributeChangedCallback(name, oldValue, newValue) {
+    // 属性被删除时 newValue 为 null；写成 <x-disclosure open> 时为空字符串 ''
+    this.content.hidden = newValue === null;
+  }
+}
+
+// 名字必须带连字符
+customElements.define('x-disclosure', Disclosure);
+</script>
+</div>
+
+<h3>消除闪烁：<code>:defined</code></h3>
+
+<p>
+  浏览器解析 HTML 时，如果组件的 JS 还没加载完，<code>&lt;x-disclosure&gt;</code> 只是一个「不认识的标签」，它的子内容会直接显示出来；
+  等 <code>define</code> 执行后，内容才被移进插槽并隐藏。于是用户会看到内容「闪一下」。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="组件注册前后的显示状态">
+  <path class="ln" d="M20 120 H740" marker-end="url(#ar)"/>
+  <text class="sm" x="740" y="140" text-anchor="end">时间 →</text>
+  <rect class="bx-r" x="20" y="30" width="300" height="70" rx="8"/>
+  <text class="ttl on-r" x="170" y="54" text-anchor="middle">注册前 :not(:defined)</text>
+  <text class="sm" x="170" y="74" text-anchor="middle">未知标签，子内容全部直接显示</text>
+  <text class="sm" x="170" y="90" text-anchor="middle">→ 加上 display: none 把它藏起来</text>
+  <path class="ln-a" d="M330 70 H390" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="360" y="60" text-anchor="middle">define()</text>
+  <rect class="bx-g" x="400" y="30" width="340" height="70" rx="8"/>
+  <text class="ttl on-g" x="570" y="54" text-anchor="middle">注册后 :defined</text>
+  <text class="sm" x="570" y="74" text-anchor="middle">内容已经进入插槽，按组件逻辑显示</text>
+  <text class="sm" x="570" y="90" text-anchor="middle">选择器不再匹配，元素正常显示</text>
+</svg>
+<figcaption>图 12-8　用 :not(:defined) 隐藏「还没升级」的自定义元素</figcaption>
+</figure>
+
+<div class="code" data-lang="css" data-file="12-21-fix-flicker.css">
+<script type="text/plain">
+x-disclosure:not(:defined) {
+  display: none;
+}
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="12-22 / 12-23">
+<script type="text/plain">
+<x-disclosure>
+  <div slot="title">Details</div>
+  This is the detail child content that will be expanded or collapsed
+  when clicking the title button.
+</x-disclosure>
+
+<!-- 默认展开：加上不带值的 open 属性 -->
+<x-disclosure open>
+  <div slot="title">Details</div>
+  ……
+</x-disclosure>
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：点击标题，或用按钮切换 open 属性</div>
+  <div class="b">
+    <x-disclosure id="disc">
+      <span slot="title">高级设置 ▾</span>
+      <p style="margin:6px 0">这里是折叠的内容。在开发者工具里给 &lt;x-disclosure&gt; 加上或删掉 open 属性，也能控制它。</p>
+    </x-disclosure>
+    <div class="row"><button id="disc-toggle">toggleAttribute('open')</button></div>
+  </div>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 两个需要补上的细节</div>
+  <ul>
+    <li><strong>无障碍</strong>：按钮应该带上 <code>aria-expanded="true/false"</code>，让屏幕阅读器知道面板的状态。</li>
+    <li><strong>重复监听</strong>：<code>connectedCallback</code> 在元素每次被插入 DOM 时都会调用。如果元素被移动过，按钮上就会有两个点击监听，一次点击切换两次、看起来「没反应」。
+      事件监听最好放在 <code>constructor</code> 里（Shadow DOM 内的元素那时已经存在），或者在 <code>disconnectedCallback</code> 中移除。</li>
+  </ul>
+  <p>另外别忘了，第 13 章会介绍原生的 <code>&lt;details&gt;</code> 元素 —— 它开箱即用地实现了这一切。</p>
+</div>
+
+<h2 id="r12-7"><span class="rn">12.7</span>带样式变体的按钮组件</h2>
+
+<p class="prob">做一个可复用的按钮组件，有默认（灰）、primary（蓝）、danger（红）三种样式。</p>
+
+<div class="code" data-lang="js" data-file="12-24-template.js">
+<script type="text/plain">
+const template = document.createElement('template');
+template.innerHTML = `
+  <style>
+    button {
+      background: #333;
+      padding: 0.5em 1.25em;
+      font-size: 1rem;
+      border: none;
+      border-radius: 5px;
+      color: white;
+    }
+    button.primary { background: #2563eb; }
+    button.danger  { background: #dc2626; }
+  </style>
+  <button>
+    <slot></slot>
+  </button>
+`;
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="12-25-button-component.js">
+<script type="text/plain">
+class StyledButton extends HTMLElement {
+  static observedAttributes = ['variant', 'type'];
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.appendChild(template.content.cloneNode(true));
+    this.button = this.shadowRoot.querySelector('button');
+  }
+
+  attributeChangedCallback(name, oldValue, newValue) {
+    if (name === 'variant') {
+      this.button.className = newValue;    // 变体名直接作为 class
+    } else if (name === 'type') {
+      this.button.type = newValue;         // 透传给内部的 button
+    }
+  }
+}
+
+customElements.define('styled-button', StyledButton);
+</script>
+</div>
+
+<div class="code" data-lang="html" data-file="12-26 / 12-27（已调整顺序）">
+<script type="text/plain">
+<styled-button id="default-button" type="button">Default</styled-button>
+<styled-button id="primary-button" type="button" variant="primary">Primary</styled-button>
+<styled-button id="danger-button" type="button" variant="danger">Danger</styled-button>
+
+<!-- 原书把 <script> 写在元素前面：脚本执行时元素还不存在，querySelector 会返回 null。
+     脚本应放在元素之后，或者使用 type="module" / defer -->
+<script>
+  document.querySelector('#default-button').addEventListener('click', () => {
+    console.log('Clicked the default button');
+  });
+<\/script>
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">实时效果</div>
+  <div class="b">
+    <div class="row">
+      <styled-button type="button" id="sb1">Default</styled-button>
+      <styled-button type="button" variant="primary" id="sb2">Primary</styled-button>
+      <styled-button type="button" variant="danger" id="sb3">Danger</styled-button>
+    </div>
+    <div class="out" id="sb-out" style="min-height:0">点击任意按钮</div>
+  </div>
+</div>
+
+<p>
+  不需要在 <code>connectedCallback</code> 里应用 class：HTML 中写好的初始属性也会触发 <code>attributeChangedCallback</code>。
+  点击事件也「免费」可用 —— 内部 button 上的 click 事件本身就是 <code>composed</code> 的，会冒泡到宿主元素，所以直接在 <code>&lt;styled-button&gt;</code> 上监听即可。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 放在表单里不会提交表单</div>
+  <p>
+    Shadow DOM 里的 <code>&lt;button type="submit"&gt;</code> 和外面的 <code>&lt;form&gt;</code> 分属不同的树，点击它<strong>不会</strong>提交外部表单。
+    要让自定义元素真正参与表单（提交、校验、重置），需要「表单关联自定义元素」：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+class StyledButton extends HTMLElement {
+  static formAssociated = true;                 // 声明为表单关联元素
+  constructor() {
+    super();
+    this.internals = this.attachInternals();    // ElementInternals
+    // …
+    this.button.addEventListener('click', () => {
+      if (this.getAttribute('type') === 'submit') this.internals.form?.requestSubmit();
+    });
+  }
+}
+// 自定义输入框还可以用 internals.setFormValue(value) 提交值、
+// internals.setValidity(...) 参与第 7 章的约束校验
+</script>
+  </div>
+</div>
+
+<h2 id="modern">现代补充</h2>
+
+<div class="tw">
+<table>
+  <tr><th>特性</th><th>解决什么问题</th><th>支持</th></tr>
+  <tr><td>声明式 Shadow DOM <code>&lt;template shadowrootmode="open"&gt;</code></td><td>不用 JS 就能在 HTML 中写出 Shadow DOM，服务端渲染（SSR）的组件无需等 JS 就有正确的结构和样式</td><td><span class="bl newly">Baseline 2024</span></td></tr>
+  <tr><td>可构造样式表 <code>new CSSStyleSheet()</code> + <code>shadowRoot.adoptedStyleSheets</code></td><td>多个组件实例共享同一份样式对象，不用每个实例都解析一遍 <code>&lt;style&gt;</code></td><td><span class="bl newly">Baseline 2023</span></td></tr>
+  <tr><td><code>ElementInternals</code> / <code>formAssociated</code></td><td>自定义元素参与表单提交、校验，设置默认 ARIA 角色</td><td><span class="bl newly">Baseline 2023</span></td></tr>
+  <tr><td>自定义状态 <code>internals.states</code> + CSS <code>:state(open)</code></td><td>像 <code>:checked</code> 那样，让外部 CSS 按组件内部状态设置样式</td><td><span class="bl newly">Baseline 2024</span></td></tr>
+  <tr><td><code>::part()</code> 与 <code>part="…"</code></td><td>有选择地向外暴露内部元素，允许使用者定制样式</td><td><span class="bl wide">广泛可用</span></td></tr>
+</table>
+</div>
+
+<div class="code" data-lang="html" data-file="声明式 Shadow DOM">
+<script type="text/plain">
+<profile-card>
+  <template shadowrootmode="open">
+    <style>:host { display: grid; }</style>
+    <div class="name"><slot name="name"></slot></div>
+  </template>
+  <div slot="name">Phillip Chavez</div>
+</profile-card>
+<!-- 浏览器解析时就直接创建好 shadowRoot；JS 加载后再 define 即可「激活」交互 -->
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="共享样式表">
+<script type="text/plain">
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(`button { padding: .5em 1.25em; border-radius: 5px; }`);
+
+class StyledButton extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).adoptedStyleSheets = [sheet];  // 所有实例共用
+  }
+}
+</script>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>继承 <code>HTMLElement</code> 写类，<code>customElements.define('带-连字符', 类)</code> 注册。</li>
+  <li>生命周期：<code>constructor</code>（初始化、attachShadow）→ <code>connectedCallback</code>（可能多次）→ <code>disconnectedCallback</code>（清理）；<code>attributeChangedCallback</code> 只对 <code>observedAttributes</code> 生效。</li>
+  <li><code>&lt;template&gt;</code> 提供结构，<code>&lt;slot&gt;</code> 投影外部内容（命名插槽用 <code>slot="名字"</code> 匹配）。</li>
+  <li>Shadow DOM 双向隔离样式；<code>:host</code> 选中宿主；CSS 变量、继承属性、<code>::part()</code> 可以穿过边界。</li>
+  <li>自定义事件需要 <code>bubbles</code>（从 shadowRoot 派发时还需 <code>composed</code>）才能被外部收到；数据放在 <code>detail</code>。</li>
+  <li>用 <code>:not(:defined)</code> 防闪烁；需要参与表单时使用 <code>formAssociated</code> + <code>ElementInternals</code>。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>给 <code>&lt;date-formatter&gt;</code> 增加 <code>format</code> 属性（short / long / full），并把它加入 <code>observedAttributes</code>。</li>
+    <li>做一个 <code>&lt;star-rating value="3" max="5"&gt;</code> 组件：点击星星修改评分，派发带 <code>detail.value</code> 的 <code>change</code> 事件。</li>
+    <li>改造 12.6 节的折叠面板：加上 <code>aria-expanded</code>，把事件监听移到 constructor，并用第 8 章的 WAAPI 给展开收起加动画。</li>
+    <li>用 <code>formAssociated</code> 做一个 <code>&lt;color-swatch-picker name="color"&gt;</code>，放进表单后提交时能带上选中的颜色值。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // 12.1
+  customElements.define('todays-date', class extends HTMLElement {
+    connectedCallback() { this.textContent = new Intl.DateTimeFormat(navigator.language, { dateStyle: 'full' }).format(new Date()); }
+  });
+
+  // 12.2
+  customElements.define('date-formatter', class extends HTMLElement {
+    static observedAttributes = ['date'];
+    constructor() { super(); this.formatter = new Intl.DateTimeFormat(navigator.language, { dateStyle: 'full' }); }
+    formatDate() {
+      var v = this.getAttribute('date');
+      this.textContent = v ? this.formatter.format(new Date(v + (v.length === 10 ? 'T00:00' : ''))) : '';
+    }
+    attributeChangedCallback() { this.formatDate(); }
+    connectedCallback() { this.formatDate(); }
+  });
+  var dfi = document.getElementById('df-input');
+  dfi.addEventListener('input', function () { document.getElementById('df').setAttribute('date', dfi.value); });
+
+  // 12.3
+  var fbTpl = document.createElement('template');
+  fbTpl.innerHTML = '<style>.feedback-prompt{display:flex;align-items:center;gap:.5em;flex-wrap:wrap}p{margin:0}button{padding:.4em 1em;font:inherit;cursor:pointer;border-radius:6px;border:1px solid #999;background:#fff}</style>' +
+    '<div class="feedback-prompt"><p>这篇内容对你有帮助吗？</p><button type="button" data-helpful="true">有帮助</button><button type="button" data-helpful="false">没帮助</button></div>';
+  customElements.define('feedback-rating', class extends HTMLElement {
+    constructor() { super(); this.attachShadow({ mode: 'open' }).appendChild(fbTpl.content.cloneNode(true)); }
+    connectedCallback() {
+      var self = this;
+      this.shadowRoot.querySelector('.feedback-prompt').addEventListener('click', function (event) {
+        var helpful = event.target.dataset.helpful;
+        if (typeof helpful !== 'undefined') {
+          self.shadowRoot.querySelector('.feedback-prompt').remove();
+          self.shadowRoot.textContent = '谢谢你的反馈！';
+          self.helpful = helpful === 'true';
+          self.shadowRoot.dispatchEvent(new CustomEvent('feedback', { composed: true, bubbles: true }));
+        }
+      });
+    }
+  });
+  document.getElementById('fb').addEventListener('feedback', function (e) {
+    document.getElementById('fb-out').textContent = '收到 feedback 事件：event.target = <' + e.target.localName + '>，event.target.helpful = ' + e.target.helpful;
+  });
+
+  // 12.4
+  var pcTpl = document.createElement('template');
+  pcTpl.innerHTML = '<style>:host{display:grid;border:1px solid var(--line-2,#ccc);border-radius:8px;padding:12px;grid-template-columns:auto 1fr;column-gap:16px;align-items:center}' +
+    '.photo{grid-row:1 / span 3;line-height:0}.name{font-size:1.5rem;font-weight:bold}.title{font-weight:bold;color:var(--accent,#d95602)}</style>' +
+    '<div class="photo"><slot name="photo"></slot></div><div class="name"><slot name="name"></slot></div><div class="title"><slot name="title"></slot></div><div class="bio"><slot></slot></div>';
+  customElements.define('profile-card', class extends HTMLElement {
+    constructor() { super(); this.attachShadow({ mode: 'open' }).appendChild(pcTpl.content.cloneNode(true)); }
+  });
+
+  // 12.6
+  var dTpl = document.createElement('template');
+  dTpl.innerHTML = '<style>button{font:inherit;font-weight:600;cursor:pointer;background:none;border:1px solid #999;border-radius:6px;padding:4px 12px;color:inherit}.content{padding:4px 2px}</style>' +
+    '<div><button type="button" class="toggle-button" aria-expanded="false"><slot name="title"></slot></button><div class="content"><slot></slot></div></div>';
+  customElements.define('x-disclosure', class extends HTMLElement {
+    static observedAttributes = ['open'];
+    constructor() {
+      super();
+      this.attachShadow({ mode: 'open' }).appendChild(dTpl.content.cloneNode(true));
+      this.content = this.shadowRoot.querySelector('.content');
+      this.btn = this.shadowRoot.querySelector('.toggle-button');
+      var self = this;
+      this.btn.addEventListener('click', function () { self.toggleAttribute('open'); });
+    }
+    connectedCallback() { this.sync(); }
+    attributeChangedCallback() { this.sync(); }
+    sync() { var open = this.hasAttribute('open'); this.content.hidden = !open; this.btn.setAttribute('aria-expanded', String(open)); }
+  });
+  document.getElementById('disc-toggle').onclick = function () { document.getElementById('disc').toggleAttribute('open'); };
+
+  // 12.7
+  var bTpl = document.createElement('template');
+  bTpl.innerHTML = '<style>button{background:#333;padding:.5em 1.25em;font-size:1rem;border:none;border-radius:5px;color:white;cursor:pointer}button.primary{background:#2563eb}button.danger{background:#dc2626}</style><button><slot></slot></button>';
+  customElements.define('styled-button', class extends HTMLElement {
+    static observedAttributes = ['variant', 'type'];
+    constructor() { super(); this.attachShadow({ mode: 'open' }).appendChild(bTpl.content.cloneNode(true)); this.button = this.shadowRoot.querySelector('button'); }
+    attributeChangedCallback(name, o, n) { if (name === 'variant') this.button.className = n; else if (name === 'type') this.button.type = n; }
+  });
+  ['sb1', 'sb2', 'sb3'].forEach(function (id) {
+    document.getElementById(id).addEventListener('click', function (e) {
+      document.getElementById('sb-out').textContent = '在 <styled-button id="' + id + '"> 上收到 click 事件（来自 Shadow DOM 内部的 button）';
+    });
+  });
+})();
+</script>
+</body>
+</html>

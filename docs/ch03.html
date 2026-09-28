@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 3 章 · URL 与路由 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="3">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 3 章</span>
+<h1>URL 与路由</h1>
+<p class="lede">
+  拼接查询参数、解析相对路径、在单页应用里切换页面 —— 这些事都离不开 URL。
+  用字符串拼接和正则表达式处理 URL 很容易出错，浏览器早已提供了专门的工具：
+  <code>URL</code>、<code>URLSearchParams</code>，以及更新的 <code>URLPattern</code> 和 Navigation API。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>认识 URL 的各个组成部分，以及 <code>URL</code> 对象上对应的属性</li>
+    <li>把相对路径解析为绝对 URL，并理解末尾斜杠带来的差异</li>
+    <li>用 <code>URLSearchParams</code> 增、删、改、查查询参数，理解百分号编码</li>
+    <li>用 <code>history.pushState</code> + <code>popstate</code> 写一个最小的前端路由</li>
+    <li>用 <code>URLPattern</code> 匹配 URL 并提取参数，了解现代的 Navigation API</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">URL 的组成部分</h2>
+
+<p>
+  URL 本质上是一个遵循 RFC 3986 语法的字符串。把它交给 <code>new URL(字符串)</code>，得到的对象会把每个部分拆成单独的属性：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="URL 各部分与 URL 对象属性的对应关系">
+  <g class="mono" style="font-size:17px">
+    <text class="on-b" x="20" y="100" textLength="66" lengthAdjust="spacingAndGlyphs">https:</text>
+    <text style="fill:var(--fg-faint)" x="86" y="100" textLength="22" lengthAdjust="spacingAndGlyphs">//</text>
+    <text class="on-g" x="108" y="100" textLength="121" lengthAdjust="spacingAndGlyphs">example.com</text>
+    <text class="on-p" x="229" y="100" textLength="55" lengthAdjust="spacingAndGlyphs">:8443</text>
+    <text class="on-a" x="284" y="100" textLength="132" lengthAdjust="spacingAndGlyphs">/admin/login</text>
+    <text class="on-r" x="416" y="100" textLength="198" lengthAdjust="spacingAndGlyphs">?username=sysadmin</text>
+    <text style="fill:var(--fg-soft)" x="614" y="100" textLength="88" lengthAdjust="spacingAndGlyphs">#profile</text>
+  </g>
+
+  <path class="ln-b" d="M21 80 V62 H85 V80"/>
+  <text class="mono on-b" x="53" y="54" text-anchor="middle">protocol</text>
+  <path class="ln-g" d="M109 80 V62 H228 V80"/>
+  <text class="mono on-g" x="168" y="54" text-anchor="middle">hostname</text>
+  <path class="ln-p" d="M231 80 V62 H282 V80"/>
+  <path class="ln-p" d="M256 62 V38"/>
+  <text class="mono on-p" x="256" y="30" text-anchor="middle">port</text>
+  <path class="ln-a" d="M286 80 V62 H414 V80"/>
+  <text class="mono on-a" x="350" y="54" text-anchor="middle">pathname</text>
+  <path class="ln-r" d="M418 80 V62 H612 V80"/>
+  <text class="mono on-r" x="515" y="54" text-anchor="middle">search</text>
+  <path class="ln" d="M616 80 V62 H701 V80"/>
+  <text class="mono" x="658" y="54" text-anchor="middle">hash</text>
+
+  <path class="ln-g" d="M109 110 V126 H282 V110"/>
+  <text class="mono on-g" x="195" y="144" text-anchor="middle">host（含端口）</text>
+  <path class="ln-d" d="M21 110 V166 H282 V110"/>
+  <text class="mono" x="151" y="184" text-anchor="middle">origin</text>
+  <path class="ln-d" d="M21 200 H701"/>
+  <text class="mono" x="361" y="220" text-anchor="middle">href（完整字符串，等同 toString()）</text>
+
+  <rect class="bx-d" x="420" y="120" width="300" height="56" rx="8"/>
+  <text class="mono" x="570" y="142" text-anchor="middle">url.searchParams</text>
+  <text class="sm" x="570" y="162" text-anchor="middle">URLSearchParams 对象，逐个操作查询参数</text>
+</svg>
+<figcaption>图 3-1　一个 URL 被拆成的各个属性</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>属性</th><th>示例值</th><th>说明</th></tr>
+  <tr><td><code>protocol</code></td><td><code>"https:"</code></td><td>包含冒号，不含斜杠。也可能是 <code>file:</code>、<code>ftp:</code>、<code>blob:</code> 等</td></tr>
+  <tr><td><code>hostname</code></td><td><code>"example.com"</code></td><td>域名或 IP</td></tr>
+  <tr><td><code>port</code></td><td><code>"8443"</code></td><td>默认端口（https 的 443）时为空字符串</td></tr>
+  <tr><td><code>host</code></td><td><code>"example.com:8443"</code></td><td>hostname + 端口</td></tr>
+  <tr><td><code>pathname</code></td><td><code>"/admin/login"</code></td><td>以 <code>/</code> 开头的路径</td></tr>
+  <tr><td><code>search</code></td><td><code>"?username=sysadmin"</code></td><td>整段查询字符串，<strong>包含</strong> <code>?</code></td></tr>
+  <tr><td><code>hash</code></td><td><code>"#profile"</code></td><td>锚点，<strong>包含</strong> <code>#</code>；老式单页应用用它做路由</td></tr>
+  <tr><td><code>origin</code></td><td><code>"https://example.com:8443"</code></td><td>只读，第 2 章讲过的「源」</td></tr>
+</table>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：URL 解剖器</div>
+  <div class="b">
+    <div class="row">
+      <input id="url-in" style="flex:1;min-width:240px" value="https://user:pw@example.com:8443/admin/login?username=sysadmin&amp;tab=2#profile">
+    </div>
+    <div class="out" id="url-out"></div>
+  </div>
+</div>
+
+<h2 id="r3-1"><span class="rn">3.1</span>解析相对 URL</h2>
+
+<p class="prob">你有一个相对路径（如 <code>/api/users</code>），想把它变成完整的绝对 URL（如 <code>https://example.com/api/users</code>）。</p>
+
+<p><code>URL</code> 构造函数的第二个参数是<strong>基准 URL</strong>。第一个参数会相对于它来解析：</p>
+
+<div class="code" data-lang="js" data-file="3-01-relative-urls.js">
+<script type="text/plain">
+/**
+ * 给定相对路径和基准 URL，解析出完整的绝对 URL
+ */
+function resolveUrl(relativePath, baseUrl) {
+  return new URL(relativePath, baseUrl).href;
+}
+
+// https://example.com/api/users
+console.log(resolveUrl('/api/users', 'https://example.com'));
+</script>
+</div>
+
+<p>
+  没有第二个参数时，<code>new URL('/api/users')</code> 会抛出 <code>TypeError</code>，因为 <code>/api/users</code> 本身不是合法的完整 URL。
+  解析规则和你在 HTML 里写 <code>&lt;a href="..."&gt;</code> 完全一样：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// ① 以 / 开头：从根目录算起，基准 URL 的路径被丢弃
+resolveUrl('/api/v1/users', 'https://example.com/api/v2');
+// → https://example.com/api/v1/users
+
+// ② 不以 / 开头：相对于基准 URL 的「所在目录」
+resolveUrl('users', 'https://example.com/api/v1/groups');
+// → https://example.com/api/v1/users   （groups 被替换成 users）
+
+// ③ ../ 表示上一级目录 —— 注意末尾斜杠！
+resolveUrl('../v1/users/', 'https://example.com/api/v2');
+// → https://example.com/v1/users/       （原书写成 /api/v1/users，是错的）
+resolveUrl('../v1/users/', 'https://example.com/api/v2/');
+// → https://example.com/api/v1/users/
+
+// ④ 第一个参数本身就是完整 URL：基准被忽略
+resolveUrl('https://other.com/x', 'https://example.com');
+// → https://other.com/x
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="末尾有无斜杠决定了基准 URL 的所在目录">
+  <text class="ttl" x="20" y="26">基准：https://example.com/api/v2（无末尾斜杠）</text>
+  <rect class="bx-g" x="20" y="40" width="80" height="34" rx="6"/><text class="mono on-g" x="60" y="62" text-anchor="middle">/</text>
+  <rect class="bx-g" x="110" y="40" width="80" height="34" rx="6"/><text class="mono on-g" x="150" y="62" text-anchor="middle">api/</text>
+  <rect class="bx-d" x="200" y="40" width="80" height="34" rx="6"/><text class="mono" x="240" y="62" text-anchor="middle">v2</text>
+  <text class="sm" x="296" y="56">v2 被当作「文件名」，所在目录是 /api/</text>
+  <text class="sm on-a" x="296" y="72">../ 从 /api/ 再上一级 → /  ⇒ /v1/users/</text>
+  <path class="ln-a" d="M150 78 C 150 96, 60 96, 60 80" marker-end="url(#ar-a)"/>
+
+  <text class="ttl" x="20" y="130">基准：https://example.com/api/v2/（有末尾斜杠）</text>
+  <rect class="bx-g" x="20" y="144" width="80" height="34" rx="6"/><text class="mono on-g" x="60" y="166" text-anchor="middle">/</text>
+  <rect class="bx-g" x="110" y="144" width="80" height="34" rx="6"/><text class="mono on-g" x="150" y="166" text-anchor="middle">api/</text>
+  <rect class="bx-g" x="200" y="144" width="80" height="34" rx="6"/><text class="mono on-g" x="240" y="166" text-anchor="middle">v2/</text>
+  <text class="sm" x="296" y="160">v2/ 是目录，所在目录就是 /api/v2/</text>
+  <text class="sm on-a" x="296" y="176">../ 上一级 → /api/  ⇒ /api/v1/users/</text>
+  <path class="ln-a" d="M240 182 C 240 200, 150 200, 150 184" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="560" y="96" width="180" height="50" rx="8"/>
+  <text class="lbl on-a" x="650" y="117" text-anchor="middle">末尾斜杠 = 「这是目录」</text>
+  <text class="sm" x="650" y="135" text-anchor="middle">API 基地址最好总带上它</text>
+</svg>
+<figcaption>图 3-2　相对路径解析时，最后一个 / 之后的部分会被当成「文件名」替换掉</figcaption>
+</figure>
+
+<p>
+  第二个参数如果不是字符串，会先调用它的 <code>toString()</code>。所以可以直接传另一个 <code>URL</code> 对象，
+  或者传 <code>window.location</code>（它的属性和 URL 很像），得到当前源下的地址：
+</p>
+
+<div class="code" data-lang="js" data-file="3-02-same-origin.js">
+<script type="text/plain">
+const usersApiUrl = new URL('/api/users', window.location);
+</script>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 不想写 try/catch？<code>URL.canParse</code> 与 <code>URL.parse</code></div>
+  <p>
+    <code>new URL()</code> 遇到非法输入会抛异常。检查用户输入时，现在有两个不抛异常的静态方法：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+URL.canParse('not a url');                 // false        Baseline 2023
+URL.canParse('/api', 'https://a.com');     // true
+
+URL.parse('not a url');                    // null（不抛异常）Baseline 2024
+URL.parse('/api', 'https://a.com')?.href;  // 'https://a.com/api'
+</script>
+  </div>
+</div>
+
+<h2 id="r3-2"><span class="rn">3.2</span>移除查询参数</h2>
+
+<p class="prob">你想把一个 URL 的查询参数全部去掉。</p>
+
+<div class="code" data-lang="js" data-file="3-03-remove-query-params.js">
+<script type="text/plain">
+/**
+ * 移除 URL 中的所有查询参数
+ * @returns 去掉查询参数后的 URL 字符串
+ */
+function removeAllQueryParameters(inputUrl) {
+  const url = new URL(inputUrl);
+  url.search = '';
+  return url.toString();
+}
+
+// 'https://example.com/api/users'
+removeAllQueryParameters('https://example.com/api/users?user=sysadmin&q=user');
+</script>
+</div>
+
+<p>URL 对象上有两个属性对应查询参数：</p>
+
+<ul>
+  <li><code>search</code>：一整段字符串，带 <code>?</code>。想清空就赋值为<strong>空字符串</strong>。</li>
+  <li><code>searchParams</code>：一个 <code>URLSearchParams</code> 对象，可以逐个增删改查。</li>
+</ul>
+
+<div class="box warn">
+  <div class="t">&#9888; 别赋值 null</div>
+  <div class="code" data-lang="js" data-file="3-04-incorrect-remove-params.js">
+<script type="text/plain">
+const url = new URL('https://example.com/api/users?user=sysadmin&q=user');
+url.search = null;
+console.log(url.toString()); // https://example.com/api/users?null  ← null 被转成了字符串 "null"
+</script>
+  </div>
+</div>
+
+<p>只删一个参数，用 <code>searchParams.delete</code>：</p>
+
+<div class="code" data-lang="js" data-file="3-05-remove-single-param.js">
+<script type="text/plain">
+function removeQueryParameter(inputUrl, paramName) {
+  const url = new URL(inputUrl);
+  url.searchParams.delete(paramName);
+  return url.toString();
+}
+
+removeQueryParameter('https://example.com/api/users?user=sysadmin&q=user', 'q');
+// https://example.com/api/users?user=sysadmin
+</script>
+</div>
+
+<h2 id="r3-3"><span class="rn">3.3</span>添加查询参数</h2>
+
+<p class="prob">URL 里可能已经有一些查询参数了，你想再加几个。</p>
+
+<div class="code" data-lang="js" data-file="3-06-add-query-params.js">
+<script type="text/plain">
+const url = new URL('https://example.com/api/search?objectType=user');
+url.searchParams.append('userRole', 'admin');
+url.searchParams.append('userRole', 'user');
+url.searchParams.append('name', 'luke');
+
+// https://example.com/api/search?objectType=user&userRole=admin&userRole=user&name=luke
+console.log(url.toString());
+</script>
+</div>
+
+<p>
+  <code>append</code> 会<strong>保留</strong>同名的旧值再追加一个；<code>set</code> 则<strong>替换掉</strong>所有同名的值：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="append 与 set 的区别">
+  <text class="ttl on-b" x="20" y="24">append('userRole', …) 两次</text>
+  <rect class="bx" x="20" y="36" width="150" height="32" rx="6"/><text class="mono" x="95" y="57" text-anchor="middle">objectType=user</text>
+  <rect class="bx-b" x="176" y="36" width="160" height="32" rx="6"/><text class="mono on-b" x="256" y="57" text-anchor="middle">userRole=admin</text>
+  <rect class="bx-b" x="342" y="36" width="150" height="32" rx="6"/><text class="mono on-b" x="417" y="57" text-anchor="middle">userRole=user</text>
+  <rect class="bx" x="498" y="36" width="110" height="32" rx="6"/><text class="mono" x="553" y="57" text-anchor="middle">name=luke</text>
+  <text class="sm on-b" x="20" y="88">同名参数可以有多个 —— 后端常用来表示数组（如多选筛选条件）</text>
+
+  <text class="ttl on-g" x="20" y="126">set('userRole', …) 两次</text>
+  <rect class="bx" x="20" y="138" width="150" height="32" rx="6"/><text class="mono" x="95" y="159" text-anchor="middle">objectType=user</text>
+  <rect class="bx-g" x="176" y="138" width="150" height="32" rx="6"/><text class="mono on-g" x="251" y="159" text-anchor="middle">userRole=user</text>
+  <rect class="bx" x="332" y="138" width="110" height="32" rx="6"/><text class="mono" x="387" y="159" text-anchor="middle">name=luke</text>
+  <text class="sm on-g" x="460" y="159">第二次 set 覆盖了第一次，只剩一个</text>
+  <text class="sm" x="20" y="190">set 会把值放在第一个同名参数原来的位置，并删掉其余同名参数</text>
+</svg>
+<figcaption>图 3-3　append 是「追加」，set 是「替换」</figcaption>
+</figure>
+
+<h3>非字符串的值</h3>
+
+<div class="code" data-lang="js" data-file="3-07 / 3-08">
+<script type="text/plain">
+const url = new URL('https://example.com/api/search?objectType=user');
+
+// 少传一个参数会抛异常：
+// TypeError: Failed to execute 'append' on 'URLSearchParams': 2 arguments required, but only 1 present.
+url.searchParams.append('name');
+
+// 非字符串会被转成字符串（这通常不是你想要的！）
+url.searchParams.append('name', null);       // name=null
+url.searchParams.append('role', undefined);  // role=undefined
+</script>
+</div>
+
+<h3>自动编码特殊字符</h3>
+
+<p>
+  URL 里有些字符有特殊含义：<code>?</code> 表示查询开始，<code>&amp;</code> 分隔参数，<code>#</code> 表示锚点。
+  如果参数值里本身就含有这些字符，必须进行<strong>百分号编码</strong>：写成 <code>%</code> 加上该字符的十六进制编码。
+  <code>URLSearchParams</code> 会自动帮你做：
+</p>
+
+<div class="code" data-lang="js" data-file="3-09-param-encoding.js">
+<script type="text/plain">
+const url = new URL('https://example.com/api/search');
+url.searchParams.append('q', 'admin&user?luke');
+
+// https://example.com/api/search?q=admin%26user%3Fluke
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="百分号编码示意">
+  <text class="mono" x="20" y="36">原值：</text>
+  <text class="mono" x="80" y="36" style="font-size:15px">admin<tspan class="on-r">&amp;</tspan>user<tspan class="on-r">?</tspan>luke</text>
+  <path class="ln-a" d="M140 50 V80" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M190 50 V80" marker-end="url(#ar-a)"/>
+  <text class="mono" x="20" y="104">编码：</text>
+  <text class="mono" x="80" y="104" style="font-size:15px">admin<tspan class="on-g">%26</tspan>user<tspan class="on-g">%3F</tspan>luke</text>
+
+  <rect class="bx" x="360" y="16" width="380" height="126" rx="8"/>
+  <text class="ttl" x="376" y="40">为什么必须编码？</text>
+  <text class="sm" x="376" y="62">不编码的话，URL 会变成 ?q=admin&amp;user?luke</text>
+  <text class="sm" x="376" y="80">服务器会把它理解为两个参数：q=admin 和 user?luke</text>
+  <text class="sm" x="376" y="104">&amp; 的 ASCII 码是 0x26 → %26</text>
+  <text class="sm" x="376" y="122">? 的 ASCII 码是 0x3F → %3F；中文按 UTF-8 编码成多个 %XX</text>
+</svg>
+<figcaption>图 3-4　百分号编码让特殊字符变成「普通数据」</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; 空格：<code>+</code> 还是 <code>%20</code>？</div>
+  <p>
+    <code>URLSearchParams</code> 按照 HTML 表单的规则（<code>application/x-www-form-urlencoded</code>）把空格编码成 <code>+</code>，
+    而 <code>encodeURIComponent</code> 把空格编码成 <code>%20</code>。两种写法服务器通常都能识别，但如果你把两者混用来手工拼字符串，就可能出问题。
+    结论：<strong>统一交给 <code>URLSearchParams</code></strong>，不要手工拼接查询字符串。
+  </p>
+</div>
+
+<div class="code" data-lang="js" data-file="3-10-set-query-params.js">
+<script type="text/plain">
+const url = new URL('https://example.com/api/search?objectType=user');
+url.searchParams.set('userRole', 'admin');
+url.searchParams.set('userRole', 'user');
+url.searchParams.set('name', 'luke');
+// https://example.com/api/search?objectType=user&userRole=user&name=luke
+</script>
+</div>
+
+<h2 id="r3-4"><span class="rn">3.4</span>读取查询参数</h2>
+
+<p class="prob">你想解析并列出一个 URL 里的所有查询参数。</p>
+
+<div class="code" data-lang="js" data-file="3-11-get-query-params.js">
+<script type="text/plain">
+/**
+ * 返回 URL 中所有查询参数组成的数组
+ * @returns 形如 [{ key, value }] 的数组
+ */
+function getQueryParameters(inputUrl) {
+  // 不能用普通对象：同名参数可能有多个，我们要全部保留
+  const result = [];
+
+  const url = new URL(inputUrl);
+
+  // 注意 forEach 回调的参数顺序是 (value, key)，和 Map 一致
+  url.searchParams.forEach((value, key) => {
+    result.push({ key, value });
+  });
+
+  return result;
+}
+
+getQueryParameters('https://example.com/api/search?name=luke%26ben');
+// [{ key: 'name', value: 'luke&ben' }]   ← 读取时自动解码
+</script>
+</div>
+
+<p>日常开发中，更常用的是这些便捷方法：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const params = new URL(location.href).searchParams;
+// 或者：const params = new URLSearchParams(location.search);
+
+params.get('page');          // 第一个 page 的值；不存在返回 null
+params.getAll('userRole');   // 所有 userRole 的值组成的数组
+params.has('debug');         // 是否存在
+
+for (const [key, value] of params) { /* URLSearchParams 是可迭代的 */ }
+Object.fromEntries(params);  // 转成普通对象（同名参数只保留最后一个）
+
+// 反过来：从对象创建查询字符串
+new URLSearchParams({ q: 'web api', page: 2 }).toString();  // 'q=web+api&page=2'
+</script>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; URLSearchParams 的新成员</div>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const p = new URLSearchParams('a=1&a=2&b=3');
+p.size;              // 3 —— 参数个数                        Baseline 2023
+p.has('a', '2');     // true —— 按「名 + 值」精确判断          Baseline 2023
+p.delete('a', '1');  // 只删除 a=1，保留 a=2                  Baseline 2023
+p.toString();        // 'a=2&b=3'
+</script>
+  </div>
+</div>
+
+<h2 id="r3-5"><span class="rn">3.5</span>一个简单的前端路由</h2>
+
+<p class="prob">你在做单页应用（SPA），希望切换「页面」时 URL 跟着变，但不要真的向服务器请求新页面。</p>
+
+<p>
+  传统网站每点一个链接，浏览器都会向服务器请求一个新的 HTML 页面。单页应用则只加载一次，
+  之后由 JavaScript 负责「换内容」并「改地址栏」。实现这件事的两个关键工具：
+</p>
+
+<dl class="terms">
+  <dt>history.pushState(state, '', url)</dt><dd>修改地址栏的 URL 并新增一条历史记录，<strong>不刷新页面</strong>。第二个参数已废弃但必须传（传空字符串）；URL 必须同源。</dd>
+  <dt>popstate 事件</dt><dd>用户点浏览器的「后退 / 前进」按钮切换历史记录时，<code>window</code> 上触发。</dd>
+</dl>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="前端路由的两条路径：点击链接和点击后退">
+  <text class="ttl on-b" x="20" y="24">路径 ① 用户点击链接</text>
+  <rect class="bx" x="20" y="36" width="120" height="44" rx="8"/><text class="lbl" x="80" y="63" text-anchor="middle">点击 &lt;a&gt;</text>
+  <rect class="bx-r" x="170" y="36" width="150" height="44" rx="8"/><text class="mono on-r" x="245" y="56" text-anchor="middle">preventDefault()</text><text class="sm" x="245" y="72" text-anchor="middle">阻止浏览器真跳转</text>
+  <rect class="bx-a" x="350" y="36" width="130" height="44" rx="8"/><text class="mono on-a" x="415" y="56" text-anchor="middle">navigate(path)</text><text class="sm" x="415" y="72" text-anchor="middle">找路由、渲染</text>
+  <rect class="bx-b" x="510" y="36" width="230" height="44" rx="8"/><text class="mono on-b" x="625" y="56" text-anchor="middle">history.pushState()</text><text class="sm" x="625" y="72" text-anchor="middle">改地址栏 + 新增历史记录</text>
+  <path class="ln" d="M142 58 H166" marker-end="url(#ar)"/>
+  <path class="ln" d="M322 58 H346" marker-end="url(#ar)"/>
+  <path class="ln" d="M482 58 H506" marker-end="url(#ar)"/>
+
+  <text class="ttl on-g" x="20" y="120">路径 ② 用户点击后退</text>
+  <rect class="bx" x="20" y="132" width="120" height="44" rx="8"/><text class="lbl" x="80" y="159" text-anchor="middle">点「←」</text>
+  <rect class="bx-g" x="170" y="132" width="150" height="44" rx="8"/><text class="mono on-g" x="245" y="152" text-anchor="middle">popstate 事件</text><text class="sm" x="245" y="168" text-anchor="middle">地址栏已经变回去了</text>
+  <rect class="bx-a" x="350" y="132" width="200" height="44" rx="8"/><text class="mono on-a" x="450" y="152" text-anchor="middle">navigate(path, false)</text><text class="sm" x="450" y="168" text-anchor="middle">只渲染，不再 pushState</text>
+  <path class="ln" d="M142 154 H166" marker-end="url(#ar)"/>
+  <path class="ln" d="M322 154 H346" marker-end="url(#ar)"/>
+
+  <text class="ttl" x="20" y="214">历史记录栈</text>
+  <rect class="bx" x="20" y="226" width="100" height="40" rx="6"/><text class="mono" x="70" y="251" text-anchor="middle">/</text>
+  <rect class="bx" x="124" y="226" width="100" height="40" rx="6"/><text class="mono" x="174" y="251" text-anchor="middle">/about</text>
+  <rect class="bx-a" x="228" y="226" width="110" height="40" rx="6"/><text class="mono on-a" x="283" y="251" text-anchor="middle">/contact</text>
+  <text class="sm" x="283" y="282" text-anchor="middle">当前 ▲</text>
+  <text class="sm" x="360" y="244">pushState 在栈顶压入一条；后退时指针左移并触发 popstate。</text>
+  <text class="sm" x="360" y="262">此时若再次 pushState，会用新记录替换掉指针右边的「前进」记录。</text>
+</svg>
+<figcaption>图 3-5　前端路由 = 拦截点击 + pushState + 监听 popstate</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="3-13-client-router.js">
+<script type="text/plain">
+// 路由表：每条路由有一个路径和要渲染的内容
+const routes = [
+  { path: '/', content: '<h1>Home</h1>' },
+  { path: '/about', content: '<h1>About</h1>' }
+];
+
+function navigate(path, pushState = true) {
+  // 找到匹配的路由并渲染（原书写成 this.routes，在普通函数里 this 不是你想的那样，已更正）
+  const route = routes.find(route => route.path === path);
+
+  // 真实项目中慎用 innerHTML，拼入用户数据会有 XSS 风险
+  document.querySelector('#main').innerHTML =
+    route ? route.content : '<h1>404 Not Found</h1>';
+
+  if (pushState) {
+    // 改变地址栏 URL 以匹配新路由
+    history.pushState({}, '', path);
+  }
+}
+</script>
+</div>
+
+<p>页面里的链接照常写 <code>href</code>，但要拦截点击，交给路由处理：</p>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<a href="/">Home</a>
+<a href="/about">About</a>
+<main id="main"></main>
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="3-14-route-links.js">
+<script type="text/plain">
+document.querySelectorAll('a').forEach(link => {
+  link.addEventListener('click', event => {
+    // 阻止浏览器向服务器请求新 URL！
+    event.preventDefault();
+    navigate(link.getAttribute('href'));
+  });
+});
+</script>
+</div>
+
+<p>最后，处理浏览器的后退 / 前进按钮：</p>
+
+<div class="code" data-lang="js" data-file="3-15 popstate">
+<script type="text/plain">
+window.addEventListener('popstate', () => {
+  // 地址栏已经变回去了，只需要渲染，不要再 pushState
+  navigate(window.location.pathname, false);
+});
+
+// 首次加载时也要按当前地址渲染一次
+navigate(window.location.pathname, false);
+</script>
+</div>
+
+<h3>刷新页面为什么会 404？</h3>
+
+<p>
+  在 <code>/about</code> 页面按 F5，浏览器会真的向服务器请求 <code>/about</code>。如果服务器上只有一个 <code>index.html</code>，就会返回 404。
+  解决办法是在服务器端配置「<strong>任何路径都返回 index.html</strong>」（通常叫 SPA fallback / history fallback），
+  让前端路由接管后续渲染。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="服务器需要把所有路径都回退到 index.html">
+  <rect class="bx" x="20" y="60" width="140" height="50" rx="8"/>
+  <text class="lbl" x="90" y="82" text-anchor="middle">刷新 /about</text>
+  <text class="sm" x="90" y="98" text-anchor="middle">真实的 HTTP 请求</text>
+  <path class="ln" d="M162 85 H230" marker-end="url(#ar)"/>
+  <rect class="bx-d" x="234" y="20" width="250" height="130" rx="10"/>
+  <text class="ttl" x="359" y="42" text-anchor="middle">服务器</text>
+  <rect class="bx-r" x="250" y="56" width="218" height="36" rx="6"/>
+  <text class="sm on-r" x="359" y="78" text-anchor="middle">没配置：找不到 about 文件 → 404</text>
+  <rect class="bx-g" x="250" y="100" width="218" height="36" rx="6"/>
+  <text class="sm on-g" x="359" y="122" text-anchor="middle">配置了 fallback：返回 index.html</text>
+  <path class="ln-g" d="M470 118 H540" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="544" y="92" width="196" height="52" rx="8"/>
+  <text class="lbl on-g" x="642" y="114" text-anchor="middle">前端路由读取 pathname</text>
+  <text class="sm" x="642" y="132" text-anchor="middle">渲染 About 页面</text>
+</svg>
+<figcaption>图 3-6　前端路由需要服务器配合</figcaption>
+</figure>
+
+<div class="box tip">
+  <div class="t">&#128161; 各平台的 fallback 配置</div>
+  <ul>
+    <li><strong>Vite 开发服务器</strong>：默认就支持。</li>
+    <li><strong>Nginx</strong>：<code>try_files $uri $uri/ /index.html;</code></li>
+    <li><strong>Netlify / Cloudflare Pages</strong>：<code>_redirects</code> 文件写 <code>/* /index.html 200</code>。</li>
+    <li><strong>GitHub Pages</strong>：不支持重写，常见的变通是把 <code>index.html</code> 复制一份为 <code>404.html</code>，或者改用 <code>#/about</code> 形式的 hash 路由（hash 部分不会发给服务器）。</li>
+  </ul>
+</div>
+
+<p>
+  单页应用的好处是切换页面快、没有白屏闪烁；代价是首屏往往要预先加载更多 JavaScript，初次加载可能更慢。
+</p>
+
+<div class="box new">
+  <div class="t">&#10024; Navigation API：为 SPA 设计的新一代路由接口</div>
+  <p>
+    <code>history</code> API 设计于 SPA 兴起之前，用起来很别扭：你得自己拦截每个链接、表单提交也要单独处理、<code>popstate</code> 的触发时机也很怪。
+    <strong>Navigation API</strong> 提供一个统一的 <code>navigate</code> 事件：链接点击、表单提交、后退前进、<code>location.href = …</code>，
+    所有同源导航都会经过它，你只需要决定是否「拦截」。<span class="bl newly">Baseline 2026</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+navigation.addEventListener('navigate', event => {
+  // 跨源、下载、纯锚点跳转等情况不拦截，交给浏览器
+  if (!event.canIntercept || event.hashChange || event.downloadRequest) return;
+
+  const url = new URL(event.destination.url);
+  event.intercept({
+    async handler() {
+      // 地址栏、历史记录浏览器已经帮你处理了；你只管渲染
+      const html = await renderRoute(url.pathname);
+      document.querySelector('#main').innerHTML = html;
+    }
+  });
+});
+// 不再需要：给每个 <a> 加 click 监听、手动 pushState、监听 popstate
+</script>
+  </div>
+  <p>
+    Chrome/Edge 从 102 版起就已支持，Safari 与 Firefox 在 2025–2026 年陆续跟进。旧浏览器上请保留 <code>history</code> 方案作为降级，
+    并以 <a href="https://caniuse.com/mdn-api_navigation">caniuse</a> 的最新数据为准。
+  </p>
+</div>
+
+<h2 id="r3-6"><span class="rn">3.6</span>用 URLPattern 匹配 URL</h2>
+
+<p class="prob">你想定义一个 URL 模式来判断 URL 是否匹配，并从中提取某一段，比如从 <code>/api/users/123/profile</code> 里取出用户 ID <code>123</code>。</p>
+
+<p>
+  <code>URLPattern</code> 使用的语法和 Express、React Router 等框架里的路由语法很像：<code>:名字</code> 表示一个命名分组，<code>*</code> 表示通配符。
+</p>
+
+<div class="code" data-lang="js" data-file="3-15-create-pattern.js">
+<script type="text/plain">
+const profilePattern = new URLPattern({ pathname: '/api/users/:userId/profile' });
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="URLPattern 按路径段匹配并提取命名分组">
+  <text class="sm" x="20" y="30">模式</text>
+  <rect class="bx" x="70" y="12" width="70" height="30" rx="6"/><text class="mono" x="105" y="32" text-anchor="middle">/api</text>
+  <rect class="bx" x="146" y="12" width="90" height="30" rx="6"/><text class="mono" x="191" y="32" text-anchor="middle">/users</text>
+  <rect class="bx-a" x="242" y="12" width="110" height="30" rx="6"/><text class="mono on-a" x="297" y="32" text-anchor="middle">/:userId</text>
+  <rect class="bx" x="358" y="12" width="100" height="30" rx="6"/><text class="mono" x="408" y="32" text-anchor="middle">/profile</text>
+
+  <text class="sm" x="20" y="92">URL</text>
+  <rect class="bx-g" x="70" y="74" width="70" height="30" rx="6"/><text class="mono on-g" x="105" y="94" text-anchor="middle">/api</text>
+  <rect class="bx-g" x="146" y="74" width="90" height="30" rx="6"/><text class="mono on-g" x="191" y="94" text-anchor="middle">/users</text>
+  <rect class="bx-a" x="242" y="74" width="110" height="30" rx="6"/><text class="mono on-a" x="297" y="94" text-anchor="middle">/123</text>
+  <rect class="bx-g" x="358" y="74" width="100" height="30" rx="6"/><text class="mono on-g" x="408" y="94" text-anchor="middle">/profile</text>
+  <path class="ln-d" d="M105 44 V72 M191 44 V72 M297 44 V72 M408 44 V72"/>
+
+  <path class="ln-a" d="M297 106 V140 H480" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="484" y="120" width="256" height="40" rx="8"/>
+  <text class="mono on-a" x="612" y="145" text-anchor="middle">pathname.groups.userId = '123'</text>
+
+  <text class="sm on-r" x="480" y="40">/v1/api/users/123/profile ✗</text>
+  <text class="sm" x="480" y="58">多出 /v1，与模式开头不一致</text>
+  <text class="sm on-g" x="480" y="90">改用 '/*/api/users/:userId/profile'</text>
+  <text class="sm" x="480" y="106">* 可以匹配任意内容（包括多段）</text>
+</svg>
+<figcaption>图 3-7　固定段必须完全一致，:name 捕获一段，* 匹配任意部分</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="3-16-url-patterns.js">
+<script type="text/plain">
+// 按规范，字符串输入要是完整 URL（或提供第二个参数作为 baseURL）
+profilePattern.test('/api/users/123/profile');                         // false（纯路径无法解析为 URL）
+profilePattern.test('/api/users/123/profile', 'https://example.com'); // true
+
+// 路径匹配 → true
+profilePattern.test('https://example.com/api/users/123/profile');
+// 也可以传 URL 对象
+profilePattern.test(new URL('https://example.com/api/users/123/profile'));
+// 路径必须完全匹配，这个多了 /v1 → false
+profilePattern.test('https://example.com/v1/api/users/123/profile');
+
+// 只关心路径时，最稳妥的写法是传一个对象
+profilePattern.test({ pathname: location.pathname });
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="3-17-wildcards.js">
+<script type="text/plain">
+const wildcardProfilePattern = new URLPattern({ pathname: '/*/api/users/:userId/profile' });
+
+// 现在匹配了：/v1 被通配符吃掉
+wildcardProfilePattern.test('https://example.com/v1/api/users/123/profile'); // true
+</script>
+</div>
+
+<p>要提取分组的值，用 <code>exec</code>。匹配成功时返回一个对象，URL 的每个部分（<code>pathname</code>、<code>search</code>、<code>hostname</code>……）都有 <code>input</code> 和 <code>groups</code>：</p>
+
+<div class="code" data-lang="js" data-file="3-18-extract-group.js">
+<script type="text/plain">
+const profilePattern = new URLPattern({ pathname: '/api/users/:userId/profile' });
+const match = profilePattern.exec('https://example.com/api/users/123/profile');
+
+console.log(match.pathname.input);          // '/api/users/123/profile'
+console.log(match.pathname.groups.userId);  // '123'
+// 不匹配时 exec 返回 null
+</script>
+</div>
+
+<h3>更多模式语法</h3>
+
+<div class="tw">
+<table>
+  <tr><th>写法</th><th>含义</th><th>示例能匹配</th></tr>
+  <tr><td><code>/books/:id</code></td><td>命名分组，匹配一段（不含 <code>/</code>）</td><td><code>/books/42</code></td></tr>
+  <tr><td><code>/books/:id?</code></td><td>可选分组</td><td><code>/books</code>、<code>/books/42</code></td></tr>
+  <tr><td><code>/books/:id(\d+)</code></td><td>用正则约束分组（写在 JS 字符串里要转义成 <code>'\\d+'</code>）</td><td><code>/books/42</code>，不匹配 <code>/books/abc</code></td></tr>
+  <tr><td><code>/files/*</code></td><td>通配符，匹配剩下的一切</td><td><code>/files/a/b/c.txt</code></td></tr>
+  <tr><td><code>/:lang(en|zh)/docs</code></td><td>只允许几个值</td><td><code>/en/docs</code>、<code>/zh/docs</code></td></tr>
+  <tr><td><code>{ hostname: '*.example.com' }</code></td><td>匹配 URL 的其他部分</td><td><code>api.example.com</code></td></tr>
+</table>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：URLPattern 测试台</div>
+  <div class="b">
+    <div class="row"><span style="width:52px" class="hint">模式</span><input id="pat-in" style="flex:1;min-width:220px" value="/api/users/:userId(\d+)/:tab?"></div>
+    <div class="row"><span style="width:52px" class="hint">路径</span><input id="pat-url" style="flex:1;min-width:220px" value="/api/users/123/profile"></div>
+    <div class="out" id="pat-out"></div>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; URLPattern 的支持现状</div>
+  <p>
+    书写作时 URLPattern 只有 Chromium 支持。2025 年 Firefox 142 和 Safari 26 相继发布支持，它已成为
+    <span class="bl newly">Baseline 2025</span> 新近可用的特性。需要兼容旧浏览器时，可以使用
+    <a href="https://github.com/kenchris/urlpattern-polyfill">urlpattern-polyfill</a>。
+  </p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>用 <code>new URL()</code> 解析和构造 URL，别用字符串拼接和正则。它的各属性对应 URL 的各部分。</li>
+  <li><code>new URL(相对路径, 基准)</code> 解析相对地址；基准 URL 有没有末尾斜杠，结果不一样。</li>
+  <li><code>URLSearchParams</code> 负责查询参数：<code>append</code> 追加、<code>set</code> 替换、<code>delete</code> 删除、<code>get/getAll</code> 读取，并自动编码。</li>
+  <li>前端路由 = 拦截链接点击 + <code>pushState</code> + 监听 <code>popstate</code>，服务器要配置 fallback；新项目可以考虑 Navigation API。</li>
+  <li><code>URLPattern</code> 用 <code>:name</code> 和 <code>*</code> 描述 URL 模式，<code>test</code> 判断、<code>exec</code> 提取。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>写一个 <code>buildUrl(base, path, params)</code>：用 <code>new URL</code> 和 <code>URLSearchParams</code> 构造请求地址，<code>params</code> 中值为数组的键要用 <code>append</code> 生成多个同名参数，值为 <code>null/undefined</code> 的键要跳过。</li>
+    <li>给 3.5 节的路由加上 <code>URLPattern</code>：支持 <code>/users/:id</code> 这样的动态路由，并把 <code>id</code> 传给渲染函数。</li>
+    <li>把路由改成用 hash 模式（<code>#/about</code>），监听 <code>hashchange</code> 事件。它为什么不需要服务器配置 fallback？</li>
+    <li>如果你的浏览器支持 Navigation API，用 <code>navigate</code> 事件重写路由，对比代码量。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // ---- URL 解剖器 ----
+  var inp = document.getElementById('url-in'), out = document.getElementById('url-out');
+  function parse() {
+    var u;
+    try { u = new URL(inp.value); } catch (e) { out.textContent = 'TypeError: 不是合法的 URL\n' + e.message; return; }
+    var keys = ['href', 'origin', 'protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash'];
+    var lines = keys.map(function (k) { return (k + '            ').slice(0, 10) + ' ' + JSON.stringify(u[k]); });
+    lines.push('');
+    lines.push('searchParams:');
+    u.searchParams.forEach(function (v, k) { lines.push('  ' + k + ' = ' + JSON.stringify(v)); });
+    out.textContent = lines.join('\n');
+  }
+  inp.addEventListener('input', parse); parse();
+
+  // ---- URLPattern ----
+  var pi = document.getElementById('pat-in'), pu = document.getElementById('pat-url'), po = document.getElementById('pat-out');
+  function test() {
+    if (typeof URLPattern === 'undefined') { po.textContent = '你的浏览器还不支持 URLPattern'; return; }
+    var p;
+    try { p = new URLPattern({ pathname: pi.value }); } catch (e) { po.textContent = '模式语法错误：' + e.message; return; }
+    var m = p.exec({ pathname: pu.value });
+    po.textContent = m
+      ? '✓ 匹配\npathname.groups = ' + JSON.stringify(m.pathname.groups, null, 2)
+      : '✗ 不匹配（exec 返回 null）';
+  }
+  pi.addEventListener('input', test); pu.addEventListener('input', test); test();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 15 章 · 性能测量 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="15">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 15 章</span>
+<h1>性能测量</h1>
+<p class="lede">
+  「页面有点慢」是一种感觉，「首字节 820ms，最慢的资源是一张 1.2MB 的图片」才是可以行动的事实。
+  浏览器内置了一整套 Performance API，可以精确记录页面加载、资源下载、你自己代码的耗时，并把这些数据交给你上报和分析。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解性能条目（performance entry）与性能缓冲区，读懂高精度时间戳</li>
+    <li>用 Navigation Timing 测量页面加载，用 Resource Timing 测量每个资源</li>
+    <li>用 User Timing（mark / measure）给自己的代码计时</li>
+    <li>用 PerformanceObserver 实时收集条目并批量上报</li>
+    <li>了解 Core Web Vitals（LCP、INP、CLS）这些「用户体验指标」</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">性能条目与缓冲区</h2>
+
+<p>三个核心 API 分工明确，但它们产生的数据都放进同一个地方 —— 页面的<strong>性能缓冲区</strong>：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="各种性能 API 产生的条目都进入同一个缓冲区">
+  <rect class="bx-b" x="20" y="20" width="200" height="56" rx="10"/>
+  <text class="ttl on-b" x="120" y="42" text-anchor="middle">Navigation Timing</text>
+  <text class="sm" x="120" y="62" text-anchor="middle">页面本身的加载过程</text>
+  <rect class="bx-g" x="20" y="90" width="200" height="56" rx="10"/>
+  <text class="ttl on-g" x="120" y="112" text-anchor="middle">Resource Timing</text>
+  <text class="sm" x="120" y="132" text-anchor="middle">CSS / JS / 图片 / fetch 请求</text>
+  <rect class="bx-a" x="20" y="160" width="200" height="56" rx="10"/>
+  <text class="ttl on-a" x="120" y="182" text-anchor="middle">User Timing</text>
+  <text class="sm" x="120" y="202" text-anchor="middle">你自己打的 mark / measure</text>
+  <text class="sm" x="120" y="240" text-anchor="middle">还有 paint、LCP、layout-shift…</text>
+
+  <path class="ln" d="M222 48 L300 110" marker-end="url(#ar)"/>
+  <path class="ln" d="M222 118 H300" marker-end="url(#ar)"/>
+  <path class="ln" d="M222 188 L300 128" marker-end="url(#ar)"/>
+
+  <rect class="bx-d" x="304" y="60" width="200" height="120" rx="12"/>
+  <text class="ttl" x="404" y="84" text-anchor="middle">性能缓冲区</text>
+  <text class="mono" x="320" y="108" style="font-size:11px">{ entryType: 'navigation' }</text>
+  <text class="mono" x="320" y="126" style="font-size:11px">{ entryType: 'resource' } ×N</text>
+  <text class="mono" x="320" y="144" style="font-size:11px">{ entryType: 'mark' }</text>
+  <text class="mono" x="320" y="162" style="font-size:11px">{ entryType: 'measure' }</text>
+
+  <path class="ln-b" d="M506 90 H550" marker-end="url(#ar-b)"/>
+  <rect class="bx-b" x="554" y="60" width="186" height="60" rx="10"/>
+  <text class="sm on-b" x="647" y="82" text-anchor="middle">主动查询（同步）</text>
+  <text class="mono" x="647" y="102" text-anchor="middle" style="font-size:11px">getEntriesByType / ByName</text>
+  <path class="ln-p" d="M506 150 H550" marker-end="url(#ar-p)"/>
+  <rect class="bx-p" x="554" y="130" width="186" height="60" rx="10"/>
+  <text class="sm on-p" x="647" y="152" text-anchor="middle">被动监听（异步）</text>
+  <text class="mono" x="647" y="172" text-anchor="middle" style="font-size:11px">PerformanceObserver</text>
+</svg>
+<figcaption>图 15-1　所有性能条目都进入同一个缓冲区，可以查询也可以监听</figcaption>
+</figure>
+
+<p>
+  所有时间戳都是 <code>DOMHighResTimeStamp</code>：一个以毫秒为单位、可以带小数（部分浏览器精确到微秒级）的数字，
+  <strong>从页面开始加载那一刻（<code>performance.timeOrigin</code>）算起</strong>。随时可以用 <code>performance.now()</code> 获取「现在」的时间戳。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 为什么不用 Date.now()？</div>
+  <p>
+    <code>Date.now()</code> 精度只到毫秒，而且会受系统时钟调整的影响（比如电脑自动校时，时间可能倒退）。
+    <code>performance.now()</code> 精度更高，并且<strong>单调递增</strong>，专门用于测量时间间隔。
+  </p>
+</div>
+
+<p>
+  收集到的指标可以在开发时用于调试，也可以在生产环境中采集真实用户的数据（这叫 <strong>RUM</strong>，Real User Monitoring），
+  用第 4 章的 Fetch 或 Beacon 上报到你的分析服务。
+</p>
+
+<h2 id="r15-1"><span class="rn">15.1</span>测量页面加载性能</h2>
+
+<p class="prob">你想知道页面加载过程中各个阶段花了多长时间。</p>
+
+<div class="code" data-lang="js" data-file="15-01-navigation-timing.js">
+<script type="text/plain">
+// 只有一个 navigation 条目
+const [navigation] = window.performance.getEntriesByType('navigation');
+</script>
+</div>
+
+<p>这个对象有很多时间戳属性，它们按发生顺序排列，构成一条完整的加载时间线：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="Navigation Timing 的时间线">
+  <path class="ln" d="M20 150 H740" marker-end="url(#ar)"/>
+  <g>
+    <rect class="bx" x="20" y="120" width="40" height="30" rx="3"/><text class="sm" x="40" y="112" text-anchor="middle">重定向</text>
+    <rect class="bx-p" x="60" y="120" width="50" height="30" rx="3"/><text class="sm on-p" x="85" y="112" text-anchor="middle">DNS</text>
+    <rect class="bx-p" x="110" y="120" width="70" height="30" rx="3"/><text class="sm on-p" x="145" y="112" text-anchor="middle">TCP+TLS</text>
+    <rect class="bx-b" x="180" y="120" width="90" height="30" rx="3"/><text class="sm on-b" x="225" y="112" text-anchor="middle">等待服务器</text>
+    <rect class="bx-b" x="270" y="120" width="80" height="30" rx="3"/><text class="sm on-b" x="310" y="112" text-anchor="middle">下载 HTML</text>
+    <rect class="bx-a" x="350" y="120" width="170" height="30" rx="3"/><text class="sm on-a" x="435" y="112" text-anchor="middle">解析 HTML、执行脚本</text>
+    <rect class="bx-g" x="520" y="120" width="120" height="30" rx="3"/><text class="sm on-g" x="580" y="112" text-anchor="middle">加载图片等子资源</text>
+    <rect class="bx" x="640" y="120" width="40" height="30" rx="3"/><text class="sm" x="660" y="112" text-anchor="middle">load</text>
+  </g>
+  <g class="mono" style="font-size:11px">
+    <path class="ln-d" d="M20 150 V190"/><text x="20" y="204">startTime = 0</text>
+    <path class="ln-d" d="M270 150 V230"/><text class="on-b" x="270" y="244" text-anchor="middle">responseStart</text>
+    <path class="ln-d" d="M350 150 V190"/><text x="350" y="204" text-anchor="middle">responseEnd</text>
+    <path class="ln-d" d="M470 150 V230"/><text class="on-a" x="470" y="244" text-anchor="middle">domInteractive</text>
+    <path class="ln-d" d="M520 150 V190"/><text x="520" y="204" text-anchor="middle">domContentLoaded…</text>
+    <path class="ln-d" d="M680 150 V230"/><text class="on-g" x="680" y="244" text-anchor="middle">loadEventEnd</text>
+  </g>
+  <path class="ln-b" d="M20 264 H270"/><text class="sm on-b" x="145" y="280" text-anchor="middle">首字节时间 TTFB</text>
+  <path class="ln-a" d="M20 60 H470"/><text class="sm on-a" x="245" y="52" text-anchor="middle">DOM 可交互</text>
+  <path class="ln-g" d="M20 30 H680"/><text class="sm on-g" x="350" y="22" text-anchor="middle">总加载时间</text>
+</svg>
+<figcaption>图 15-2　Navigation Timing：从发起导航到 load 事件结束</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>指标</th><th>计算方式</th><th>含义</th></tr>
+  <tr><td>首字节时间（TTFB）</td><td><code>responseStart - startTime</code></td><td>服务器多快开始回应（网络 + 服务器处理）</td></tr>
+  <tr><td>DOM 可交互</td><td><code>domInteractive - startTime</code></td><td>HTML 解析完成</td></tr>
+  <tr><td>DOMContentLoaded</td><td><code>domContentLoadedEventEnd - startTime</code></td><td>同步脚本和 defer 脚本都执行完</td></tr>
+  <tr><td>总加载时间</td><td><code>loadEventEnd - startTime</code></td><td>图片等所有子资源也加载完</td></tr>
+</table>
+</div>
+
+<p>
+  navigation 条目的 <code>startTime</code> 永远是 0。除了时间，它还带有其他有用信息：<code>transferSize</code>（传输的字节数）、
+  <code>type</code>（<code>'navigate'</code> 正常打开 / <code>'reload'</code> 刷新 / <code>'back_forward'</code> 前进后退）、<code>responseStatus</code>（HTTP 状态码）、<code>name</code>（页面 URL）。
+</p>
+
+<div class="demo">
+  <div class="h">试一试：本页的加载数据</div>
+  <div class="b">
+    <div class="row"><button id="nav-btn">读取 navigation 条目</button></div>
+    <div class="out" id="nav-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r15-2"><span class="rn">15.2</span>测量资源加载性能</h2>
+
+<p class="prob">你想知道页面加载的每个资源（CSS、JS、图片、接口请求）分别用了多长时间。</p>
+
+<div class="code" data-lang="js" data-file="15-02-resource-performance-entries.js">
+<script type="text/plain">
+const entries = window.performance.getEntriesByType('resource');
+
+entries.forEach(entry => {
+  // name 是资源的 URL；responseEnd - startTime 是加载耗时
+  console.log(entry.name, entry.initiatorType, entry.responseEnd - entry.startTime);
+});
+</script>
+</div>
+
+<p>
+  每个资源一个条目。<code>initiatorType</code> 表示资源是由谁发起的：<code>'link'</code>（CSS）、<code>'script'</code>、<code>'img'</code>、<code>'fetch'</code>、<code>'xmlhttprequest'</code>、<code>'beacon'</code> 等。
+  用 Fetch API 发出的请求也会出现在这里，所以它同样可以用来<strong>监测真实用户访问你的接口有多快</strong>。页面加载后发出的请求，会在发出时陆续加入缓冲区。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="一个资源条目的各个阶段">
+  <path class="ln" d="M20 80 H740" marker-end="url(#ar)"/>
+  <rect class="bx" x="40" y="50" width="60" height="30" rx="3"/><text class="sm" x="70" y="42" text-anchor="middle">排队</text>
+  <rect class="bx-p" x="100" y="50" width="60" height="30" rx="3"/><text class="sm on-p" x="130" y="42" text-anchor="middle">DNS</text>
+  <rect class="bx-p" x="160" y="50" width="100" height="30" rx="3"/><text class="sm on-p" x="210" y="42" text-anchor="middle">连接</text>
+  <rect class="bx-b" x="260" y="50" width="160" height="30" rx="3"/><text class="sm on-b" x="340" y="42" text-anchor="middle">等待响应</text>
+  <rect class="bx-g" x="420" y="50" width="200" height="30" rx="3"/><text class="sm on-g" x="520" y="42" text-anchor="middle">下载内容</text>
+  <text class="mono" x="40" y="104" style="font-size:11px">startTime</text>
+  <text class="mono" x="100" y="120" style="font-size:11px">domainLookupStart</text>
+  <text class="mono" x="160" y="104" style="font-size:11px">connectStart</text>
+  <text class="mono" x="260" y="120" style="font-size:11px">requestStart</text>
+  <text class="mono" x="420" y="104" style="font-size:11px">responseStart</text>
+  <text class="mono" x="620" y="120" style="font-size:11px">responseEnd</text>
+  <path class="ln-a" d="M40 140 H620"/><text class="sm on-a" x="330" y="136" text-anchor="middle">duration ≈ responseEnd − startTime</text>
+</svg>
+<figcaption>图 15-3　单个资源的时间构成（复用已有连接时，DNS 和连接阶段为 0）</figcaption>
+</figure>
+
+<div class="box warn">
+  <div class="t">&#9888; 跨域资源的详细时间是 0</div>
+  <p>
+    出于安全考虑，从其他源加载的资源（CDN 上的字体、第三方脚本）只公开 <code>startTime</code>、<code>duration</code> 等少数字段，
+    DNS、连接、<code>transferSize</code> 等细节都是 0 —— 除非对方服务器返回了 <code>Timing-Allow-Origin</code> 响应头。
+    另外，缓冲区默认最多保存约 250 个资源条目，资源很多的页面可以用 <code>performance.setResourceTimingBufferSize()</code> 调大，或者改用 PerformanceObserver 边来边收。
+  </p>
+</div>
+
+<h2 id="r15-3"><span class="rn">15.3</span>找出最慢的资源</h2>
+
+<p class="prob">列出加载最慢的几个资源，看看该从哪里优化。</p>
+
+<div class="code" data-lang="js" data-file="15-03-find-slowest-resources.js">
+<script type="text/plain">
+const slowestResources = window.performance.getEntriesByType('resource')
+  .sort((a, b) =>
+    (b.responseEnd - b.startTime) - (a.responseEnd - a.startTime))   // 按耗时降序
+  .slice(0, 5);                                                       // 取前 5 个
+</script>
+</div>
+
+<p>反过来，找最快的五个只需交换比较的顺序（升序）：</p>
+
+<div class="code" data-lang="js" data-file="15-04-fastest-resources.js">
+<script type="text/plain">
+const fastestResources = window.performance.getEntriesByType('resource')
+  .sort((a, b) =>
+    (a.responseEnd - a.startTime) - (b.responseEnd - b.startTime))
+  .slice(0, 5);
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 在控制台里一目了然</div>
+  <p>配合第 16 章的 <code>console.table</code>，一行代码就能得到一张资源耗时表：</p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+console.table(slowestResources.map(e => ({
+  资源: e.name.split('/').pop(),
+  类型: e.initiatorType,
+  耗时ms: Math.round(e.responseEnd - e.startTime),
+  大小KB: Math.round(e.transferSize / 1024)
+})));
+</script>
+  </div>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：本页加载最慢的 5 个资源</div>
+  <div class="b">
+    <div class="row"><button id="res-btn">排序并显示</button></div>
+    <div class="out" id="res-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r15-4"><span class="rn">15.4</span>查找某个资源的耗时</h2>
+
+<p class="prob">只想看某一个 URL（比如 <code>/api/users</code> 接口）的请求耗时。</p>
+
+<div class="code" data-lang="js" data-file="15-05-specific-url.js">
+<script type="text/plain">
+// 查找所有对 /api/users 的请求
+const entries = window.performance.getEntriesByName('https://localhost/api/users', 'resource');
+</script>
+</div>
+
+<p>
+  资源条目的 <code>name</code> 就是它的<strong>完整 URL</strong>（包括协议、域名和查询参数），所以第一个参数要写完整地址 —— 第 3 章的 <code>new URL('/api/users', location).href</code> 正好派上用场。
+  第二个参数限定条目类型。同一个 URL 请求过多次，就会返回多个条目。
+</p>
+
+<h2 id="r15-5"><span class="rn">15.5</span>测量渲染性能</h2>
+
+<p class="prob">记录「把一批数据渲染到页面上」花了多长时间。</p>
+
+<p>
+  <strong>User Timing</strong> API 提供两种条目：<strong>mark</strong>（标记，一个时间点）和 <strong>measure</strong>（测量，两个时间点之间的时长）。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="mark 是时间点，measure 是两个 mark 之间的时长">
+  <path class="ln" d="M20 90 H740" marker-end="url(#ar)"/>
+  <path class="ln-a" d="M180 50 V100" style="stroke-width:2.5"/>
+  <circle cx="180" cy="50" r="6" style="fill:var(--accent)"/>
+  <text class="mono on-a" x="180" y="36" text-anchor="middle">mark('render-start')</text>
+  <path class="ln-a" d="M540 50 V100" style="stroke-width:2.5"/>
+  <circle cx="540" cy="50" r="6" style="fill:var(--accent)"/>
+  <text class="mono on-a" x="540" y="36" text-anchor="middle">mark('render-end')</text>
+  <rect class="bx" x="180" y="62" width="360" height="22" rx="4"/>
+  <text class="sm" x="360" y="78" text-anchor="middle">dataView.render(data)</text>
+  <rect class="bx-g" x="180" y="108" width="360" height="26" rx="4"/>
+  <text class="mono on-g" x="360" y="126" text-anchor="middle">measure('render', 'render-start', 'render-end') → duration</text>
+</svg>
+<figcaption>图 15-4　mark 是图钉，measure 是图钉之间的尺子</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="15-06-measure-rendering.js">
+<script type="text/plain">
+// 渲染前打一个标记
+window.performance.mark('render-start');
+
+// 创建组件并渲染数据（DataView 是一个假想的组件，不是内置的同名类型）
+const dataView = new DataView();
+dataView.render(data);
+
+// 渲染完成后再打一个标记
+window.performance.mark('render-end');
+
+// 在两个标记之间创建一个测量
+const measure = window.performance.measure('render', 'render-start', 'render-end');
+console.log(measure.startTime, measure.duration);
+</script>
+</div>
+
+<p>mark 和 measure 都会加入缓冲区，之后可以按名字查到：</p>
+
+<div class="code" data-lang="js" data-file="15-07-lookup-by-name.js">
+<script type="text/plain">
+// 只有一个名为 render 的测量，用解构取出
+const [renderMeasure] = window.performance.getEntriesByName('render');
+</script>
+</div>
+
+<p>还可以通过 <code>detail</code> 选项附带任意数据，此时起止标记要写在选项对象里：</p>
+
+<div class="code" data-lang="js" data-file="15-08-measure-with-data.js">
+<script type="text/plain">
+window.performance.mark('render-start');
+const dataView = new DataView();
+dataView.render(data);
+window.performance.mark('render-end');
+
+// 把渲染的数据（或者只是数据量）作为附加信息
+const measure = window.performance.measure('render', {
+  start: 'render-start',
+  end: 'render-end',
+  detail: { rows: data.length }
+});
+measure.detail;   // { rows: 1000 }
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 在开发者工具里也看得到</div>
+  <p>
+    Chrome 开发者工具「性能」面板录制时，你的 mark 和 measure 会出现在「Timings」轨道上，
+    和浏览器自己的渲染、脚本执行放在同一条时间线里对照，非常直观。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：测量渲染 N 行表格的耗时</div>
+  <div class="b">
+    <div class="row">
+      <select id="ut-n"><option>100</option><option selected>1000</option><option>5000</option></select>
+      <button id="ut-btn">渲染并测量</button>
+    </div>
+    <div class="out" id="ut-out" style="min-height:0"></div>
+    <div id="ut-target" style="max-height:120px;overflow:auto;font-size:12px;margin-top:8px"></div>
+  </div>
+</div>
+
+<h2 id="r15-6"><span class="rn">15.6</span>测量多步骤任务</h2>
+
+<p class="prob">一个流程分几步：下载数据 → 处理 → 上传结果。你既想知道每一步的时间，也想知道总时间。</p>
+
+<div class="code" data-lang="js" data-file="15-09-profiling-multi-step.js">
+<script type="text/plain">
+window.performance.mark('transactions-start');
+const transactions = await fetch('/api/users/123/transactions').then(r => r.json());
+window.performance.mark('transactions-end');
+
+window.performance.mark('process-start');
+const analytics = processAnalytics(transactions);
+window.performance.mark('process-end');
+
+window.performance.mark('upload-start');
+await fetch('/api/analytics', {
+  method: 'POST',
+  body: JSON.stringify(analytics),
+  headers: { 'Content-Type': 'application/json' }
+});
+window.performance.mark('upload-end');
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="15-10-generating-measures.js">
+<script type="text/plain">
+console.log('Download transactions:',
+  performance.measure('transactions', 'transactions-start', 'transactions-end').duration);
+console.log('Process analytics:',
+  performance.measure('analytics', 'process-start', 'process-end').duration);
+console.log('Upload analytics:',
+  performance.measure('upload', 'upload-start', 'upload-end').duration);
+
+// 同一个 mark 可以被多个 measure 复用：第一步的开始 → 最后一步的结束
+console.log('Total time:',
+  performance.measure('total', 'transactions-start', 'upload-end').duration);
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="多个 measure 复用 mark">
+  <path class="ln" d="M20 60 H740" marker-end="url(#ar)"/>
+  <g class="mono" style="font-size:10.5px">
+    <circle cx="40" cy="60" r="5" style="fill:var(--accent)"/><text class="on-a" x="40" y="44" text-anchor="middle">tx-start</text>
+    <circle cx="300" cy="60" r="5" style="fill:var(--accent)"/><text class="on-a" x="300" y="44" text-anchor="middle">tx-end</text>
+    <circle cx="310" cy="60" r="5" style="fill:var(--accent)"/><text class="on-a" x="336" y="20" text-anchor="middle">process-start</text>
+    <circle cx="430" cy="60" r="5" style="fill:var(--accent)"/><text class="on-a" x="430" y="44" text-anchor="middle">process-end</text>
+    <circle cx="440" cy="60" r="5" style="fill:var(--accent)"/><text class="on-a" x="476" y="20" text-anchor="middle">upload-start</text>
+    <circle cx="720" cy="60" r="5" style="fill:var(--accent)"/><text class="on-a" x="720" y="44" text-anchor="middle">upload-end</text>
+  </g>
+  <rect class="bx-b" x="40" y="76" width="260" height="24" rx="4"/><text class="sm on-b" x="170" y="93" text-anchor="middle">transactions（网络）</text>
+  <rect class="bx-p" x="310" y="76" width="120" height="24" rx="4"/><text class="sm on-p" x="370" y="93" text-anchor="middle">analytics（计算）</text>
+  <rect class="bx-b" x="440" y="76" width="280" height="24" rx="4"/><text class="sm on-b" x="580" y="93" text-anchor="middle">upload（网络）</text>
+  <rect class="bx-g" x="40" y="112" width="680" height="24" rx="4"/><text class="sm on-g" x="380" y="129" text-anchor="middle">total = tx-start → upload-end</text>
+  <text class="sm" x="380" y="160" text-anchor="middle">一眼看出瓶颈在哪一步：这里网络占了大头，优化计算意义不大</text>
+</svg>
+<figcaption>图 15-5　分步测量 + 总测量</figcaption>
+</figure>
+
+<h2 id="r15-7"><span class="rn">15.7</span>监听性能条目</h2>
+
+<p class="prob">每当有新的性能条目产生（比如每次调用接口），就把数据上报到分析服务。</p>
+
+<p>与第 6 章的观察者一样，<code>PerformanceObserver</code> 在新条目产生时回调你：</p>
+
+<div class="code" data-lang="js" data-file="15-11-performance-observer.js（已修正）">
+<script type="text/plain">
+const analyticsEndpoint = 'https://example.com/api/analytics';
+
+const observer = new PerformanceObserver(entries => {
+  for (let entry of entries.getEntries()) {
+    // 只关心 fetch 发起的请求
+    if (entry.initiatorType === 'fetch') {
+      // 用 Beacon 快速上报。原书直接传 entry 对象，会被转成 "[object Object]"。
+      // PerformanceEntry 有 toJSON()，所以 JSON.stringify 可以得到完整数据
+      navigator.sendBeacon(analyticsEndpoint, JSON.stringify(entry));
+    }
+  }
+});
+
+observer.observe({ type: 'resource' });
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="上报请求本身也会产生新的性能条目，形成无限循环">
+  <rect class="bx-b" x="40" y="60" width="150" height="50" rx="10"/>
+  <text class="lbl on-b" x="115" y="90" text-anchor="middle">业务 fetch 请求</text>
+  <path class="ln" d="M192 85 H248" marker-end="url(#ar)"/>
+  <rect class="bx" x="252" y="60" width="150" height="50" rx="10"/>
+  <text class="lbl" x="327" y="82" text-anchor="middle">新的 resource</text>
+  <text class="lbl" x="327" y="98" text-anchor="middle">条目</text>
+  <path class="ln" d="M404 85 H460" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="464" y="60" width="150" height="50" rx="10"/>
+  <text class="lbl on-p" x="539" y="82" text-anchor="middle">Observer 回调</text>
+  <text class="sm" x="539" y="98" text-anchor="middle">fetch 上报</text>
+  <path class="ln-r" d="M539 112 V150 H327 V114" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="433" y="168" text-anchor="middle">如果用 fetch 上报，上报请求本身又是一个新条目 → 无限循环</text>
+  <rect class="bx-g" x="630" y="60" width="120" height="50" rx="10"/>
+  <text class="sm on-g" x="690" y="80" text-anchor="middle">解决：按 name</text>
+  <text class="sm on-g" x="690" y="96" text-anchor="middle">排除上报地址</text>
+  <text class="sm" x="380" y="30" text-anchor="middle">（sendBeacon 的请求 initiatorType 是 'beacon'，不会被 'fetch' 条件选中，所以上例恰好不会循环）</text>
+</svg>
+<figcaption>图 15-6　小心：上报请求本身也会被观察到</figcaption>
+</figure>
+
+<p>真实应用中，每个请求都单独上报太频繁了。更好的做法是先攒在缓冲数组里，攒够一批再一次发送：</p>
+
+<div class="code" data-lang="js" data-file="15-12-batch.js">
+<script type="text/plain">
+const analyticsEndpoint = 'https://example.com/api/analytics';
+
+// 攒够 10 条再发送
+const BUFFER_SIZE = 10;
+let buffer = [];
+
+const observer = new PerformanceObserver(entries => {
+  for (let entry of entries.getEntries()) {
+    // 排除发往分析服务的请求本身，避免无限循环
+    if (entry.initiatorType === 'fetch' && entry.name !== analyticsEndpoint) {
+      buffer.push(entry);
+    }
+
+    if (buffer.length === BUFFER_SIZE) {
+      fetch(analyticsEndpoint, {
+        method: 'POST',
+        body: JSON.stringify(buffer),
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      // 发送后清空
+      buffer = [];
+    }
+  }
+});
+
+observer.observe({ type: 'resource' });
+
+// 补充：页面关闭时，把没攒满的也发出去（第 4 章的 visibilitychange + sendBeacon）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && buffer.length) {
+    navigator.sendBeacon(analyticsEndpoint, JSON.stringify(buffer));
+    buffer = [];
+  }
+});
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; buffered: true —— 不错过观察开始之前的条目</div>
+  <p>
+    观察者只会收到 <code>observe()</code> 调用<strong>之后</strong>产生的条目。如果你的监控脚本加载得比较晚，
+    加上 <code>observer.observe({ type: 'resource', buffered: true })</code>，就会先把缓冲区里已有的同类条目也交给你一次。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：PerformanceObserver 实时捕获 fetch 请求</div>
+  <div class="b">
+    <div class="row"><button id="po-fetch">fetch 一个资源</button></div>
+    <div class="out" id="po-out" style="min-height:0">observer 已开始监听 resource 条目……</div>
+  </div>
+</div>
+
+<h2 id="vitals">现代补充：Core Web Vitals</h2>
+
+<p>
+  上面的指标都是「技术视角」的。Google 提出的 <strong>Core Web Vitals</strong> 则从「用户感受」出发，只关注三件事：
+  主要内容多快出现、交互多快有反应、页面会不会乱跳。它们也是通过 PerformanceObserver 收集的。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="三个 Core Web Vitals 指标及其阈值">
+  <g>
+    <text class="ttl" x="20" y="30">LCP 最大内容绘制</text>
+    <text class="sm" x="20" y="48">最大的图片或文字块出现的时间</text>
+    <rect class="bx-g" x="260" y="18" width="200" height="30" rx="4"/><text class="sm on-g" x="360" y="38" text-anchor="middle">良好 ≤ 2.5 s</text>
+    <rect class="bx-a" x="460" y="18" width="140" height="30" rx="4"/><text class="sm on-a" x="530" y="38" text-anchor="middle">需改进 ≤ 4 s</text>
+    <rect class="bx-r" x="600" y="18" width="140" height="30" rx="4"/><text class="sm on-r" x="670" y="38" text-anchor="middle">差 &gt; 4 s</text>
+  </g>
+  <g>
+    <text class="ttl" x="20" y="100">INP 交互到下一次绘制</text>
+    <text class="sm" x="20" y="118">点击 / 按键后多久看到反馈</text>
+    <rect class="bx-g" x="260" y="88" width="200" height="30" rx="4"/><text class="sm on-g" x="360" y="108" text-anchor="middle">良好 ≤ 200 ms</text>
+    <rect class="bx-a" x="460" y="88" width="140" height="30" rx="4"/><text class="sm on-a" x="530" y="108" text-anchor="middle">需改进 ≤ 500 ms</text>
+    <rect class="bx-r" x="600" y="88" width="140" height="30" rx="4"/><text class="sm on-r" x="670" y="108" text-anchor="middle">差 &gt; 500 ms</text>
+  </g>
+  <g>
+    <text class="ttl" x="20" y="170">CLS 累计布局偏移</text>
+    <text class="sm" x="20" y="188">内容意外跳动的程度（无单位）</text>
+    <rect class="bx-g" x="260" y="158" width="200" height="30" rx="4"/><text class="sm on-g" x="360" y="178" text-anchor="middle">良好 ≤ 0.1</text>
+    <rect class="bx-a" x="460" y="158" width="140" height="30" rx="4"/><text class="sm on-a" x="530" y="178" text-anchor="middle">需改进 ≤ 0.25</text>
+    <rect class="bx-r" x="600" y="158" width="140" height="30" rx="4"/><text class="sm on-r" x="670" y="178" text-anchor="middle">差 &gt; 0.25</text>
+  </g>
+  <text class="sm" x="380" y="228" text-anchor="middle">以真实用户第 75 百分位的数据评估。INP 在 2024 年 3 月取代了旧的 FID 指标</text>
+</svg>
+<figcaption>图 15-7　Core Web Vitals 的三个指标与阈值</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 原生方式：观察 LCP 条目（取最后一个就是最终的 LCP）
+new PerformanceObserver(list => {
+  const entries = list.getEntries();
+  const lcp = entries[entries.length - 1];
+  console.log('LCP:', lcp.startTime, lcp.element);
+}).observe({ type: 'largest-contentful-paint', buffered: true });
+
+// 实际项目推荐使用 Google 维护的 web-vitals 库，它处理了大量边界情况
+import { onLCP, onINP, onCLS } from 'web-vitals';
+onLCP(sendToAnalytics);
+onINP(sendToAnalytics);
+onCLS(sendToAnalytics);
+</script>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 支持情况与其他新条目类型</div>
+  <p>
+    这些用户体验指标长期以来只能在 Chromium 中采集；近两年 Firefox 和 Safari 也陆续实现了 LCP 与 INP 所依赖的 API，
+    CLS（<code>layout-shift</code>）目前仍主要在 Chromium 中可用。
+    此外，Chromium 还提供 <code>long-animation-frame</code>（LoAF）条目，能告诉你哪一段脚本导致了卡顿。
+    用 <code>PerformanceObserver.supportedEntryTypes</code> 可以查看当前浏览器支持哪些条目类型：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+PerformanceObserver.supportedEntryTypes;
+// Chrome 中类似：['element', 'event', 'first-input', 'largest-contentful-paint', 'layout-shift',
+//                'long-animation-frame', 'longtask', 'mark', 'measure', 'navigation', 'paint', 'resource', …]
+</script>
+  </div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>性能条目都在一个缓冲区里：用 <code>getEntriesByType / getEntriesByName</code> 查询，用 <code>PerformanceObserver</code> 监听（<code>buffered: true</code> 补齐历史）。</li>
+  <li>时间戳是相对 <code>timeOrigin</code> 的高精度毫秒数；测时长用 <code>performance.now()</code> 而不是 <code>Date.now()</code>。</li>
+  <li>navigation 条目：TTFB = <code>responseStart</code>，DOM 可交互 = <code>domInteractive</code>，总加载 = <code>loadEventEnd</code>。</li>
+  <li>resource 条目：<code>name</code> 是 URL，<code>responseEnd - startTime</code> 是耗时；跨域资源需要 <code>Timing-Allow-Origin</code> 才有细节。</li>
+  <li><code>mark()</code> 打点、<code>measure()</code> 计算区间，可附带 <code>detail</code>；同一个 mark 可复用于多个 measure。</li>
+  <li>上报时注意：对象要先序列化、排除上报请求本身、批量发送、页面隐藏时补发；用户体验指标看 LCP、INP、CLS。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>写一个 <code>timed(name, asyncFn)</code> 高阶函数：执行前后自动打 mark，结束后创建 measure 并返回原函数的结果。</li>
+    <li>在你的项目里加一个「性能面板」：页面加载完成后在角落显示 TTFB、DOM 可交互时间和最慢的三个资源。</li>
+    <li>用 PerformanceObserver 统计页面上所有接口请求的平均耗时和最大耗时，每 30 秒用 <code>console.table</code> 打印一次。</li>
+    <li>用 Chrome 开发者工具的 Lighthouse 或「性能」面板测一次你的网站，对照 LCP、INP、CLS 的阈值找出一个可以改进的点。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  function ms(v) { return v.toFixed(1).padStart(8, ' ') + ' ms'; }
+
+  document.getElementById('nav-btn').onclick = function () {
+    var n = performance.getEntriesByType('navigation')[0], o = document.getElementById('nav-out');
+    if (!n) { o.textContent = '没有 navigation 条目'; return; }
+    o.textContent =
+      'type                 ' + n.type + '\n' +
+      '首字节 TTFB          ' + ms(n.responseStart - n.startTime) + '\n' +
+      'DOM 可交互           ' + ms(n.domInteractive - n.startTime) + '\n' +
+      'DOMContentLoaded     ' + ms(n.domContentLoadedEventEnd - n.startTime) + '\n' +
+      '总加载 loadEventEnd  ' + ms(n.loadEventEnd - n.startTime) + '\n' +
+      'transferSize         ' + n.transferSize + ' bytes' +
+      (n.responseStatus !== undefined ? '\nresponseStatus       ' + n.responseStatus : '');
+  };
+
+  document.getElementById('res-btn').onclick = function () {
+    var list = performance.getEntriesByType('resource')
+      .sort(function (a, b) { return (b.responseEnd - b.startTime) - (a.responseEnd - a.startTime); }).slice(0, 5);
+    document.getElementById('res-out').textContent = list.length ? list.map(function (e, i) {
+      return (i + 1) + '. ' + ms(e.responseEnd - e.startTime) + '  [' + e.initiatorType + ']  ' + e.name.split('/').slice(-2).join('/');
+    }).join('\n') : '没有资源条目';
+  };
+
+  document.getElementById('ut-btn').onclick = function () {
+    var n = +document.getElementById('ut-n').value, t = document.getElementById('ut-target');
+    performance.clearMarks('render-start'); performance.clearMarks('render-end'); performance.clearMeasures('render');
+    performance.mark('render-start');
+    var html = '<table>';
+    for (var i = 0; i < n; i++) html += '<tr><td>' + i + '</td><td>第 ' + i + ' 行</td><td>' + Math.random().toFixed(4) + '</td></tr>';
+    t.innerHTML = html + '</table>';
+    t.offsetHeight;   // 强制布局，让测量包含排版时间
+    performance.mark('render-end');
+    var m = performance.measure('render', { start: 'render-start', end: 'render-end', detail: { rows: n } });
+    document.getElementById('ut-out').textContent = "measure('render') → startTime = " + m.startTime.toFixed(1) + ' ms，duration = ' + m.duration.toFixed(2) + ' ms，detail = ' + JSON.stringify(m.detail);
+  };
+
+  var po = document.getElementById('po-out'), lines = [];
+  new PerformanceObserver(function (list) {
+    list.getEntries().forEach(function (e) {
+      if (e.initiatorType !== 'fetch') return;
+      lines.unshift('[' + e.initiatorType + '] ' + e.name.split('/').pop() + '  ' + (e.responseEnd - e.startTime).toFixed(1) + ' ms');
+      po.textContent = lines.slice(0, 8).join('\n');
+    });
+  }).observe({ type: 'resource' });
+  document.getElementById('po-fetch').onclick = function () {
+    fetch('assets/style.css?t=' + Date.now()).catch(function (e) { po.textContent = 'fetch 失败（本地文件打开时浏览器禁止 fetch）：' + e.message; });
+  };
+})();
+</script>
+</body>
+</html>

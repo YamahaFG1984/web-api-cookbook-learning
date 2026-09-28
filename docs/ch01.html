@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 1 章 · 异步 API — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="1">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 1 章</span>
+<h1>异步 API</h1>
+<p class="lede">
+  这本书里的大部分浏览器 API 都是<strong>异步</strong>的：你调用它，结果不会马上回来。
+  网络请求要等服务器、读文件要等磁盘、定位要等 GPS。
+  这一章先把「怎么等结果」这件事彻底讲清楚 —— 后面 18 章都建立在它上面。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>分清三种异步模式：回调函数、事件、Promise</li>
+    <li>会用 <code>then / catch</code> 和 <code>async / await</code> 处理 Promise</li>
+    <li>会把多个异步任务串起来（链式）或并起来（<code>Promise.all</code> 家族）</li>
+    <li>用 <code>requestAnimationFrame</code> 写出流畅的 JS 动画</li>
+    <li>把一个基于事件的老 API 包装成 Promise，并了解 2024 年后的新工具 <code>Promise.withResolvers</code></li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">为什么需要「异步」</h2>
+
+<p>
+  浏览器里的 JavaScript 只有<strong>一条主线程</strong>。它既要运行你的代码，也要负责响应点击、滚动、重新绘制页面。
+  如果「请求一个接口」要让主线程傻等 2 秒，这 2 秒里页面就是完全卡死的：按钮点不动、动画不动、连文字都选不了。
+</p>
+
+<p>
+  所以浏览器的做法是：<strong>把耗时的事交给后台去做，主线程继续干别的；等后台做完了，再通知你</strong>。
+  「通知你」的方式，就是本章要学的三种模式。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="同步等待会阻塞主线程，异步则让主线程继续工作">
+  <text class="ttl on-r" x="20" y="28">同步（假如浏览器这样做）</text>
+  <rect class="bx" x="20" y="40" width="120" height="36" rx="6"/>
+  <text class="lbl" x="80" y="63" text-anchor="middle">发起请求</text>
+  <rect class="bx-r" x="140" y="40" width="420" height="36" rx="6"/>
+  <text class="lbl on-r" x="350" y="63" text-anchor="middle">⏳ 主线程傻等 2 秒 —— 页面完全卡死</text>
+  <rect class="bx" x="560" y="40" width="180" height="36" rx="6"/>
+  <text class="lbl" x="650" y="63" text-anchor="middle">拿到结果，继续</text>
+
+  <text class="ttl on-g" x="20" y="118">异步（浏览器真实的做法）</text>
+  <rect class="bx" x="20" y="130" width="120" height="36" rx="6"/>
+  <text class="lbl" x="80" y="153" text-anchor="middle">发起请求</text>
+  <rect class="bx-g" x="140" y="130" width="100" height="36" rx="6"/>
+  <text class="sm on-g" x="190" y="153" text-anchor="middle">响应点击</text>
+  <rect class="bx-g" x="240" y="130" width="100" height="36" rx="6"/>
+  <text class="sm on-g" x="290" y="153" text-anchor="middle">播放动画</text>
+  <rect class="bx-g" x="340" y="130" width="100" height="36" rx="6"/>
+  <text class="sm on-g" x="390" y="153" text-anchor="middle">处理滚动</text>
+  <rect class="bx-g" x="440" y="130" width="120" height="36" rx="6"/>
+  <text class="sm on-g" x="500" y="153" text-anchor="middle">……照常工作</text>
+  <rect class="bx-a" x="560" y="130" width="180" height="36" rx="6"/>
+  <text class="lbl on-a" x="650" y="153" text-anchor="middle">结果到了 → 通知你</text>
+
+  <rect class="bx-d" x="140" y="184" width="420" height="30" rx="6"/>
+  <text class="sm" x="350" y="204" text-anchor="middle">网络请求在浏览器后台进行（不占用主线程）</text>
+  <path class="ln-a" d="M560 199 H640 V170" marker-end="url(#ar-a)"/>
+</svg>
+<figcaption>图 1-1　异步的本质：耗时工作放到后台，主线程不被堵住</figcaption>
+</figure>
+
+<h3>三种「通知你」的方式</h3>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128222;</span><h4>回调函数</h4><p>你把一个函数交给 API，它做完后「回头调用」这个函数，把结果当参数传进来。最原始，也是另外两种的基础。</p></div>
+  <div class="card"><span class="ic">&#128276;</span><h4>事件</h4><p>对象会「发出」有名字的事件（<code>click</code>、<code>load</code>、<code>error</code>），你用 <code>addEventListener</code> 订阅。可以触发很多次。</p></div>
+  <div class="card"><span class="ic">&#127903;</span><h4>Promise</h4><p>函数立即返回一张「取货凭证」，将来凭它拿结果或拿错误。<strong>只结算一次</strong>。现代 API 基本都用它。</p></div>
+</div>
+
+<h3>事件：EventTarget 接口</h3>
+
+<p>
+  能发出事件的对象（DOM 元素、<code>window</code>、<code>XMLHttpRequest</code>、<code>WebSocket</code>……）都实现了
+  <code>EventTarget</code> 接口，因此都有 <code>addEventListener</code> 和 <code>removeEventListener</code> 两个方法。
+  事件处理函数会收到一个<strong>事件对象</strong>，里面装着「发生了什么」的细节，比如点的是哪个元素、HTTP 状态码是多少。
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const button = document.querySelector('#save');
+
+function onClick(event) {
+  console.log('被点击的元素是', event.target);
+}
+
+button.addEventListener('click', onClick);    // 每次点击都会调用
+button.removeEventListener('click', onClick); // 手动取消订阅
+
+// 现代写法：用 AbortController 一次性取消一批监听（后面会反复用到）
+const controller = new AbortController();
+button.addEventListener('click', onClick, { signal: controller.signal });
+window.addEventListener('resize', onResize, { signal: controller.signal });
+controller.abort(); // 两个监听同时被移除
+
+// 只想监听一次？加 once
+button.addEventListener('click', onClick, { once: true });
+</script>
+</div>
+
+<h3>事件 vs Promise</h3>
+
+<div class="tw">
+<table>
+  <tr><th></th><th>事件</th><th>Promise</th></tr>
+  <tr><td>触发次数</td><td>可以很多次（每次点击都触发）</td><td><strong>只结算一次</strong>，是个一次性操作</td></tr>
+  <tr><td>「来晚了」怎么办</td><td>在你订阅之前发生的事件就<strong>丢了</strong></td><td>任何时候调用 <code>then</code> 都能拿到结果</td></tr>
+  <tr><td>错误处理</td><td>要另外监听 <code>error</code> 事件</td><td>内建 <code>catch</code>，还能用 <code>try/catch</code></td></tr>
+  <tr><td>适合什么</td><td>重复发生的事：点击、滚动、消息</td><td>一次性的事：一次请求、一次读取</td></tr>
+</table>
+</div>
+
+<h2 id="r1-1"><span class="rn">1.1</span>使用 Promise</h2>
+
+<p class="prob">你要调用一个返回 Promise 的 API，并拿到它的结果。</p>
+
+<p>
+  Promise（中文常译为「承诺」或「期约」）是一个<strong>占位对象</strong>：它代表一个「现在还没有、但将来会有」的值。
+  你可以把它想象成奶茶店的取餐小票 —— 下单后立刻拿到小票，饮料做好时凭小票领取；要是原料没了，店员也会凭小票告诉你「做不了」。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="Promise 的三种状态">
+  <rect class="bx-b" x="40" y="80" width="170" height="60" rx="30"/>
+  <text class="ttl on-b" x="125" y="106" text-anchor="middle">pending</text>
+  <text class="sm" x="125" y="124" text-anchor="middle">进行中（等待）</text>
+
+  <rect class="bx-g" x="330" y="20" width="190" height="60" rx="30"/>
+  <text class="ttl on-g" x="425" y="46" text-anchor="middle">fulfilled</text>
+  <text class="sm" x="425" y="64" text-anchor="middle">已兑现（成功，带着值）</text>
+
+  <rect class="bx-r" x="330" y="140" width="190" height="60" rx="30"/>
+  <text class="ttl on-r" x="425" y="166" text-anchor="middle">rejected</text>
+  <text class="sm" x="425" y="184" text-anchor="middle">已拒绝（失败，带着原因）</text>
+
+  <path class="ln-g" d="M212 100 C 260 80, 280 55, 326 52" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="226" y="56">resolve(值)</text>
+  <path class="ln-r" d="M212 120 C 260 140, 280 165, 326 168" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="232" y="170">reject(错误)</text>
+
+  <path class="ln-g" d="M522 50 H600" marker-end="url(#ar-g)"/>
+  <rect class="bx" x="604" y="30" width="136" height="40" rx="8"/>
+  <text class="mono" x="672" y="55" text-anchor="middle">.then(值 =&gt; …)</text>
+
+  <path class="ln-r" d="M522 170 H600" marker-end="url(#ar-r)"/>
+  <rect class="bx" x="604" y="150" width="136" height="40" rx="8"/>
+  <text class="mono" x="672" y="175" text-anchor="middle">.catch(错 =&gt; …)</text>
+
+  <text class="sm" x="425" y="112" text-anchor="middle">fulfilled 或 rejected 统称 settled（已敲定）</text>
+  <text class="sm" x="425" y="128" text-anchor="middle">一旦敲定，状态永远不会再变</text>
+</svg>
+<figcaption>图 1-2　Promise 的生命周期：只会从 pending 走向两个终点之一</figcaption>
+</figure>
+
+<p>
+  假设有个函数 <code>getUsers()</code> 会发请求加载用户列表，并返回一个 Promise。
+  调用 <code>then</code> 传入成功时的回调，调用 <code>catch</code> 传入失败时的回调：
+</p>
+
+<div class="code" data-lang="js" data-file="1-01-using-promises.js">
+<script type="text/plain">
+getUsers()
+  .then(
+    // 用户列表加载完成后，这个函数被调用
+    userList => {
+      console.log('User List:');
+      userList.forEach(user => {
+        console.log(user.name);
+      });
+    }
+  ).catch(error => {
+    console.error('Failed to load the user list:', error);
+  });
+</script>
+</div>
+
+<p>
+  两个回调<strong>只会有一个被调用</strong>，取决于结果是成功还是失败。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 永远要处理错误</div>
+  <p>
+    如果一个 Promise 被拒绝而你没有 <code>catch</code>，浏览器会报「Uncaught (in promise)」错误。
+    为了兜底，可以在 <code>window</code> 上监听 <code>unhandledrejection</code> 事件，统一记录这些漏网之鱼：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+window.addEventListener('unhandledrejection', event => {
+  console.error('有个 Promise 被拒绝了却没人处理：', event.reason);
+  // 这里可以上报到你的错误监控服务
+});
+</script>
+  </div>
+</div>
+
+<h2 id="r1-2"><span class="rn">1.2</span>加载图片，失败时使用备用图</h2>
+
+<p class="prob">你想加载一张图片，如果加载失败，就换成一张「一定存在」的备用图。</p>
+
+<p>
+  <code>&lt;img&gt;</code> 是典型的<strong>事件型</strong> API：加载成功触发 <code>load</code>，失败触发 <code>error</code>。
+  我们把它包进一个 Promise，让调用方可以用更简洁的 <code>then/catch</code>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="加载图片失败时切换备用图的流程">
+  <rect class="bx-b" x="20" y="100" width="130" height="50" rx="8"/>
+  <text class="lbl on-b" x="85" y="122" text-anchor="middle">image.src = url</text>
+  <text class="sm" x="85" y="139" text-anchor="middle">开始加载</text>
+
+  <path class="ln" d="M152 125 H198" marker-end="url(#ar)"/>
+  <polygon class="bx" points="270,85 340,125 270,165 200,125" style="fill:var(--panel);stroke:var(--line-2);stroke-width:1.5"/>
+  <text class="lbl" x="270" y="129" text-anchor="middle">哪个事件？</text>
+
+  <path class="ln-g" d="M270 85 V40 H400" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="280" y="60">load</text>
+  <rect class="bx-g" x="404" y="18" width="190" height="44" rx="8"/>
+  <text class="lbl on-g" x="499" y="45" text-anchor="middle">resolve(image) ✓</text>
+
+  <path class="ln-r" d="M340 125 H400" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="350" y="116">error</text>
+  <polygon points="490,90 580,125 490,160 400,125" style="fill:var(--panel);stroke:var(--line-2);stroke-width:1.5"/>
+  <text class="sm" x="490" y="122" text-anchor="middle">失败的是</text>
+  <text class="sm" x="490" y="136" text-anchor="middle">备用图吗？</text>
+
+  <path class="ln-r" d="M580 125 H620 V200" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="592" y="116">是</text>
+  <rect class="bx-r" x="560" y="204" width="180" height="40" rx="8"/>
+  <text class="lbl on-r" x="650" y="229" text-anchor="middle">reject(error) ✗</text>
+
+  <path class="ln-a" d="M490 160 V236 H85 V152" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="500" y="186">否</text>
+  <text class="sm on-a" x="290" y="228" text-anchor="middle">image.src = fallbackUrl，再试一次</text>
+</svg>
+<figcaption>图 1-3　两个事件 + 一次重试，决定三种结局</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="1-02-image-with-fallback.js">
+<script type="text/plain">
+/**
+ * 加载图片。加载失败时改用备用图片。
+ * @param url          要加载的图片地址
+ * @param fallbackUrl  出错时加载的备用图片
+ * @returns 一个 Promise，成功时得到可以插入 DOM 的 Image 元素
+ */
+function loadImage(url, fallbackUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    // 尝试加载给定地址的图片
+    image.src = url;
+
+    // 成功加载后触发 load 事件
+    image.addEventListener('load', () => {
+      resolve(image);
+    });
+
+    // 加载失败触发 error 事件
+    image.addEventListener('error', error => {
+      // 两种情况直接失败：(1) 没有备用图；(2) 失败的就是备用图
+      if (!fallbackUrl || image.src === fallbackUrl) {
+        reject(error);
+      } else {
+        // 原图失败了，换备用图再试一次
+        image.src = fallbackUrl;
+      }
+    });
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="1-03-using-loadImage.js">
+<script type="text/plain">
+loadImage('https://example.com/profile.jpg', 'https://example.com/fallback.jpg')
+  .then(image => {
+    // container 是页面里放图片的元素
+    container.appendChild(image);
+  }).catch(error => {
+    console.error('Image load failed');
+  });
+</script>
+</div>
+
+<p>
+  <strong>判断顺序很关键</strong>：<code>error</code> 事件每次加载失败都会触发。如果不先检查「失败的是不是备用图」，
+  备用图也失败时就会进入「设置备用图 → 失败 → 再设置备用图」的死循环。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 一个隐藏的坑：<code>image.src</code> 是绝对地址</div>
+  <p>
+    读取 <code>image.src</code> 时，浏览器返回的是<strong>解析后的完整 URL</strong>。如果你传入的备用地址是相对路径，
+    比如 <code>'/img/fallback.png'</code>，那么 <code>image.src === fallbackUrl</code> 永远是 <code>false</code>
+    （左边是 <code>https://你的域名/img/fallback.png</code>），备用图坏掉时又会死循环。
+    稳妥的做法是用一个布尔变量记录「是否已经切换过」：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+let triedFallback = false;
+image.addEventListener('error', error => {
+  if (!fallbackUrl || triedFallback) {
+    reject(error);
+  } else {
+    triedFallback = true;
+    image.src = fallbackUrl;
+  }
+});
+</script>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 现代补充：<code>img.decode()</code></div>
+  <p>
+    <code>HTMLImageElement</code> 自带一个返回 Promise 的 <code>decode()</code> 方法：它等图片下载<em>并且解码完成</em>后才兑现，
+    插入页面时就不会出现「半张图」的闪烁。<span class="bl wide">Baseline 广泛可用</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+const img = new Image();
+img.src = 'photo.jpg';
+try {
+  await img.decode();        // 下载 + 解码完成
+  container.append(img);
+} catch {
+  img.src = 'fallback.jpg';  // 失败时同样可以走备用逻辑
+}
+</script>
+  </div>
+</div>
+
+<h2 id="r1-3"><span class="rn">1.3</span>链式调用 Promise</h2>
+
+<p class="prob">你需要按顺序调用几个异步 API，后一个要用到前一个的结果。</p>
+
+<p>
+  设想一个博客应用：<code>getUser(id)</code> 加载用户，<code>getPosts(user)</code> 加载该用户的文章。
+  必须先拿到 user，才能调用 <code>getPosts</code>。
+</p>
+
+<div class="code" data-lang="js" data-file="1-04-promise-chain.js">
+<script type="text/plain">
+/**
+ * 加载某个用户所有文章的标题
+ * @returns 一个 Promise，最终得到标题数组
+ */
+function getPostTitles(userId) {
+  return getUser(userId)
+    // 回调收到加载好的 user 对象
+    .then(user => {
+      console.log(`Getting posts for ${user.name}`);
+      // 返回的 Promise 会成为下一个 then 的等待对象
+      return getPosts(user);
+    })
+    // 这个 then 等的是 getPosts 的结果
+    .then(posts => {
+      return posts.map(post => post.title);
+    })
+    // getUser 或 getPosts 任何一个失败都会来到这里
+    .catch(error => {
+      console.error('Error loading data:', error);
+    });
+}
+</script>
+</div>
+
+<p>
+  秘密在于：<strong><code>then</code> 本身也返回一个新的 Promise</strong>。
+  你在回调里 <code>return</code> 什么，新 Promise 就兑现成什么；如果 <code>return</code> 的本身是个 Promise，就等它完成再往下传。
+  于是可以一节一节地接下去，像一条流水线。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="Promise 链的数据流动">
+  <rect class="bx-b" x="20" y="40" width="140" height="56" rx="8"/>
+  <text class="mono on-b" x="90" y="64" text-anchor="middle">getUser(id)</text>
+  <text class="sm" x="90" y="84" text-anchor="middle">Promise&lt;user&gt;</text>
+
+  <rect class="bx" x="210" y="40" width="160" height="56" rx="8"/>
+  <text class="mono" x="290" y="64" text-anchor="middle">.then(user =&gt;</text>
+  <text class="mono" x="290" y="82" text-anchor="middle">getPosts(user))</text>
+
+  <rect class="bx" x="420" y="40" width="160" height="56" rx="8"/>
+  <text class="mono" x="500" y="64" text-anchor="middle">.then(posts =&gt;</text>
+  <text class="mono" x="500" y="82" text-anchor="middle">posts.map(…))</text>
+
+  <rect class="bx-g" x="630" y="40" width="110" height="56" rx="8"/>
+  <text class="lbl on-g" x="685" y="64" text-anchor="middle">标题数组</text>
+  <text class="sm" x="685" y="82" text-anchor="middle">最终结果</text>
+
+  <path class="ln-b" d="M162 68 H206" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="184" y="60" text-anchor="middle">user</text>
+  <path class="ln-b" d="M372 68 H416" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="394" y="60" text-anchor="middle">posts</text>
+  <path class="ln-b" d="M582 68 H626" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="604" y="60" text-anchor="middle">titles</text>
+
+  <rect class="bx-r" x="210" y="140" width="370" height="40" rx="8"/>
+  <text class="mono on-r" x="395" y="165" text-anchor="middle">.catch(error =&gt; …)</text>
+  <path class="ln-r" d="M90 98 V160 H206" marker-end="url(#ar-r)"/>
+  <path class="ln-d" d="M290 98 V136"/>
+  <path class="ln-d" d="M500 98 V136"/>
+  <text class="sm on-r" x="100" y="124">任何一环出错</text>
+  <text class="sm on-r" x="100" y="138">跳过剩下的 then</text>
+</svg>
+<figcaption>图 1-4　每个 then 的返回值流向下一个 then；任何一环失败直接跳到 catch</figcaption>
+</figure>
+
+<p>
+  链尾的 <code>catch</code> 就像一个大的 <code>try/catch</code>：链中任何位置出错，都会跳过剩余的 <code>then</code> 直接来到这里。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 新手最常犯的错：忘了 return</div>
+  <p>
+    如果写成 <code>.then(user =&gt; { getPosts(user); })</code>（花括号里没有 <code>return</code>），
+    下一个 <code>then</code> 收到的会是 <code>undefined</code>，而且<strong>不会等</strong> <code>getPosts</code> 完成。
+    箭头函数用花括号时，一定记得写 <code>return</code>。
+  </p>
+</div>
+
+<h2 id="r1-4"><span class="rn">1.4</span>使用 async 和 await</h2>
+
+<p class="prob">你用的 API 返回 Promise，但你希望代码读起来像普通的、从上往下执行的同步代码。</p>
+
+<div class="vs">
+  <div class="old"><div class="h">then 写法</div>
+    <div class="code" data-lang="js">
+<script type="text/plain">
+getUsers()
+  .then(userList => {
+    console.log('User List:');
+    userList.forEach(user => {
+      console.log(user.name);
+    });
+  })
+  .catch(error => {
+    console.error('Failed:', error);
+  });
+</script>
+    </div>
+  </div>
+  <div class="new"><div class="h">await 写法</div>
+    <div class="code" data-lang="js" data-file="1-05-using-await.js">
+<script type="text/plain">
+// 函数必须声明为 async，里面才能用 await
+async function listUsers() {
+  try {
+    // 等价于 getUsers().then(...)
+    const userList = await getUsers();
+    console.log('User List:');
+    userList.forEach(user => {
+      console.log(user.name);
+    });
+  } catch (error) { // 等价于 .catch(...)
+    console.error('Failed:', error);
+  }
+}
+</script>
+    </div>
+  </div>
+</div>
+
+<p>
+  <code>await</code> 会「暂停」当前这个 <code>async</code> 函数，直到 Promise 敲定：兑现了就返回值，拒绝了就<strong>抛出</strong>错误，
+  所以用普通的 <code>try/catch</code> 就能处理。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; 「暂停」不是真的卡住浏览器</div>
+  <p>
+    <code>await</code> 暂停的只是<strong>当前这个函数</strong>。函数会把控制权交还给浏览器，浏览器照常处理点击、渲染；
+    等 Promise 有了结果，函数再从暂停处接着跑。这和图 1-1 里「同步傻等」完全不同。
+  </p>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 顶层 await</div>
+  <p>
+    在 ES 模块（<code>&lt;script type="module"&gt;</code>）里，可以直接在最外层写 <code>await</code>，不需要包一个 <code>async</code> 函数。
+    本教程后面的很多示例都默认运行在模块里。<span class="bl wide">Baseline 广泛可用</span>
+  </p>
+  <div class="code" data-lang="html">
+<script type="text/plain">
+<script type="module">
+  const response = await fetch('/api/config');
+  const config = await response.json();
+<\/script>
+</script>
+  </div>
+</div>
+
+<h2 id="r1-5"><span class="rn">1.5</span>并行执行多个 Promise</h2>
+
+<p class="prob">你有几个互不依赖的异步任务，想让它们同时进行，全部完成后再处理。</p>
+
+<p>
+  如果写成三个连续的 <code>await</code>，它们会<strong>一个接一个</strong>执行，总耗时是三者之和。
+  既然互不依赖，就应该一起发出去：
+</p>
+
+<div class="code" data-lang="js" data-file="1-06-promise-all.js">
+<script type="text/plain">
+// 同时加载三个用户
+Promise.all([
+  getUser(1),
+  getUser(2),
+  getUser(3)
+]).then(users => {
+  // users 是一个数组，顺序和上面传入的顺序一一对应
+}).catch(error => {
+  // 只要有一个失败，就会来到这里
+  console.error('One of the users failed to load:', error);
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="串行与并行执行的耗时对比">
+  <text class="ttl" x="20" y="24">串行：await 三次</text>
+  <rect class="bx-b" x="20" y="36" width="180" height="28" rx="5"/><text class="sm on-b" x="110" y="55" text-anchor="middle">getUser(1) · 300ms</text>
+  <rect class="bx-b" x="200" y="36" width="180" height="28" rx="5"/><text class="sm on-b" x="290" y="55" text-anchor="middle">getUser(2) · 300ms</text>
+  <rect class="bx-b" x="380" y="36" width="180" height="28" rx="5"/><text class="sm on-b" x="470" y="55" text-anchor="middle">getUser(3) · 300ms</text>
+  <text class="lbl on-r" x="580" y="55">≈ 900ms</text>
+
+  <text class="ttl" x="20" y="100">并行：Promise.all</text>
+  <rect class="bx-g" x="20" y="112" width="180" height="28" rx="5"/><text class="sm on-g" x="110" y="131" text-anchor="middle">getUser(1)</text>
+  <rect class="bx-g" x="20" y="144" width="140" height="28" rx="5"/><text class="sm on-g" x="90" y="163" text-anchor="middle">getUser(2)</text>
+  <rect class="bx-g" x="20" y="176" width="160" height="28" rx="5"/><text class="sm on-g" x="100" y="195" text-anchor="middle">getUser(3)</text>
+  <path class="ln-d" d="M200 108 V210"/>
+  <text class="lbl on-g" x="210" y="163">≈ 300ms（取决于最慢的那个）</text>
+
+  <path class="ln" d="M20 230 H740" marker-end="url(#ar)"/>
+  <text class="sm" x="740" y="246" text-anchor="end">时间 →</text>
+</svg>
+<figcaption>图 1-5　互不依赖的任务并行执行，总耗时由最慢的决定</figcaption>
+</figure>
+
+<p>
+  <code>Promise.all</code> 有个「一票否决」的特点：<strong>任何一个失败，整体立刻失败</strong>，其他成功的结果也拿不到了。
+  如果你希望「成功的照用，失败的单独提示」，改用 <code>Promise.allSettled</code>：它<em>永远</em>兑现，
+  每个结果是一个带 <code>status</code> 字段的对象。
+</p>
+
+<div class="code" data-lang="js" data-file="1-07-promise-allsettled.js">
+<script type="text/plain">
+Promise.allSettled([
+  getUser(1),
+  getUser(2),
+  getUser(3)
+]).then(results => {
+  results.forEach(result => {
+    if (result.status === 'fulfilled') {
+      console.log('- User:', result.value.name);   // 成功：有 value
+    } else {
+      console.log('- Error:', result.reason);      // 失败：有 reason
+    }
+  });
+});
+// 不需要 catch：allSettled 总是兑现
+</script>
+</div>
+
+<h3>Promise 组合器全家福</h3>
+
+<p>除了书里讲的两个，还有两个同样常用的兄弟，四个放在一起对比最好记：</p>
+
+<div class="tw">
+<table>
+  <tr><th>方法</th><th>什么时候兑现</th><th>什么时候拒绝</th><th>典型用途</th></tr>
+  <tr><td><code>Promise.all</code></td><td>全部成功</td><td>任一失败（立即）</td><td>缺一不可的数据</td></tr>
+  <tr><td><code>Promise.allSettled</code></td><td>全部敲定（不论成败）</td><td>从不</td><td>批量操作，逐个报告结果</td></tr>
+  <tr><td><code>Promise.race</code></td><td>第一个敲定的是成功</td><td>第一个敲定的是失败</td><td>给请求加超时</td></tr>
+  <tr><td><code>Promise.any</code></td><td>任一成功</td><td>全部失败（<code>AggregateError</code>）</td><td>多个镜像源，谁快用谁</td></tr>
+</table>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：四个组合器的行为差异</div>
+  <div class="b">
+    <p style="margin-top:0">模拟三个任务：A 用 300ms 成功，B 用 600ms <strong>失败</strong>，C 用 900ms 成功。</p>
+    <div class="row">
+      <button data-combinator="all">Promise.all</button>
+      <button data-combinator="allSettled">Promise.allSettled</button>
+      <button data-combinator="race">Promise.race</button>
+      <button data-combinator="any">Promise.any</button>
+    </div>
+    <div class="out" id="combinator-out">点击上面的按钮开始……</div>
+  </div>
+</div>
+
+<h2 id="r1-6"><span class="rn">1.6</span>用 requestAnimationFrame 做动画</h2>
+
+<p class="prob">你想用 JavaScript 给元素做动画，而且要流畅、不浪费性能。</p>
+
+<p>
+  屏幕每秒刷新若干次（常见 60Hz，现在很多手机和显示器是 120Hz 甚至更高）。
+  <code>requestAnimationFrame(callback)</code> 的意思是：<strong>「下次重绘之前，请调用我的函数」</strong>。
+  它天然和屏幕刷新同步，而且标签页切到后台时会自动暂停，不白白耗电。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="requestAnimationFrame 在每次重绘前调用回调">
+  <text class="sm" x="20" y="22">60Hz 屏幕：每帧约 16.7ms</text>
+  <path class="ln" d="M20 70 H740" marker-end="url(#ar)"/>
+  <g>
+    <rect class="bx-a" x="40"  y="40" width="40" height="22" rx="4"/><text class="sm on-a" x="60" y="55" text-anchor="middle">rAF</text>
+    <rect class="bx-g" x="80"  y="40" width="40" height="22" rx="4"/><text class="sm on-g" x="100" y="55" text-anchor="middle">绘制</text>
+    <rect class="bx-a" x="170" y="40" width="40" height="22" rx="4"/><text class="sm on-a" x="190" y="55" text-anchor="middle">rAF</text>
+    <rect class="bx-g" x="210" y="40" width="40" height="22" rx="4"/><text class="sm on-g" x="230" y="55" text-anchor="middle">绘制</text>
+    <rect class="bx-a" x="300" y="40" width="40" height="22" rx="4"/><text class="sm on-a" x="320" y="55" text-anchor="middle">rAF</text>
+    <rect class="bx-g" x="340" y="40" width="40" height="22" rx="4"/><text class="sm on-g" x="360" y="55" text-anchor="middle">绘制</text>
+    <rect class="bx-a" x="430" y="40" width="40" height="22" rx="4"/><text class="sm on-a" x="450" y="55" text-anchor="middle">rAF</text>
+    <rect class="bx-g" x="470" y="40" width="40" height="22" rx="4"/><text class="sm on-g" x="490" y="55" text-anchor="middle">绘制</text>
+    <rect class="bx-a" x="560" y="40" width="40" height="22" rx="4"/><text class="sm on-a" x="580" y="55" text-anchor="middle">rAF</text>
+    <rect class="bx-g" x="600" y="40" width="40" height="22" rx="4"/><text class="sm on-g" x="620" y="55" text-anchor="middle">绘制</text>
+  </g>
+  <path class="ln-d" d="M40 76 V86 M170 76 V86"/>
+  <text class="sm" x="105" y="98" text-anchor="middle">16.7ms</text>
+
+  <text class="sm" x="20" y="130">setTimeout(fn, 16)：和屏幕不同步，有时一帧跑两次、有时一帧都没跑 → 掉帧、抖动</text>
+  <path class="ln" d="M20 160 H740"/>
+  <g>
+    <rect class="bx-r" x="50"  y="146" width="14" height="14" rx="3"/>
+    <rect class="bx-r" x="150" y="146" width="14" height="14" rx="3"/>
+    <rect class="bx-r" x="170" y="146" width="14" height="14" rx="3"/>
+    <rect class="bx-r" x="330" y="146" width="14" height="14" rx="3"/>
+    <rect class="bx-r" x="420" y="146" width="14" height="14" rx="3"/>
+    <rect class="bx-r" x="440" y="146" width="14" height="14" rx="3"/>
+    <rect class="bx-r" x="610" y="146" width="14" height="14" rx="3"/>
+  </g>
+  <text class="sm on-r" x="740" y="180" text-anchor="end">后台标签页里还会继续跑，白白耗电</text>
+</svg>
+<figcaption>图 1-6　rAF 的回调紧贴着每次重绘执行</figcaption>
+</figure>
+
+<p>书中的例子让一个 <code>div</code> 在 2 秒内淡出，并把帧率限制在 60 FPS：</p>
+
+<div class="code" data-lang="js" data-file="1-08-requestAnimationFrame.js">
+<script type="text/plain">
+const animationSeconds = 2; // 动画持续 2 秒
+const fps = 60;             // 目标帧率
+
+// 每帧之间的间隔（毫秒）
+const frameInterval = 1000 / fps;
+// 动画总帧数
+const frameCount = animationSeconds * fps;
+// 每帧透明度减少多少
+const opacityIncrement = 1 / frameCount;
+
+// 上一帧的时间戳
+let lastTimestamp;
+// 初始透明度
+let opacity = 1;
+
+function fade(timestamp) {
+  if (!lastTimestamp) {
+    lastTimestamp = timestamp;
+  }
+
+  // 距上一帧过了多久？还不够一帧的间隔就先跳过，等下次
+  const elapsed = timestamp - lastTimestamp;
+  if (elapsed < frameInterval) {
+    requestAnimationFrame(fade);   // ← 原书代码写成了 animate，这里已更正
+    return;
+  }
+
+  lastTimestamp = timestamp;
+
+  // 降低透明度，但不能小于 0
+  opacity = Math.max(0, opacity - opacityIncrement);
+  box.style.opacity = opacity;
+
+  // 还没到 0，就预约下一帧
+  if (opacity > 0) {
+    requestAnimationFrame(fade);
+  }
+}
+
+// 预约第一帧
+requestAnimationFrame(fade);
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 原书示例的笔误</div>
+  <p>
+    原书与配套代码中，<code>fade</code> 函数内部两处都调用了 <code>requestAnimationFrame(animate)</code>，
+    但并不存在 <code>animate</code> 函数，运行会报 <code>ReferenceError</code>。上面的代码已改为 <code>fade</code>。
+  </p>
+</div>
+
+<h3>更稳健的写法：按「经过的时间」算进度</h3>
+
+<p>
+  上面的写法按「帧数」递减透明度。它有个问题：如果某些帧因为页面繁忙被跳过了，动画就会<strong>变慢</strong>，
+  实际用时超过 2 秒。更推荐的做法是<strong>根据已经过去的时间计算进度</strong>，不管帧率是 30、60 还是 120，
+  动画总是准时结束：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+function fadeOut(element, duration = 2000) {
+  return new Promise(resolve => {
+    let start;
+    function step(timestamp) {
+      start ??= timestamp;                           // 第一帧记录起点
+      const progress = Math.min((timestamp - start) / duration, 1); // 0 → 1
+      element.style.opacity = 1 - progress;
+      if (progress < 1) {
+        requestAnimationFrame(step);
+      } else {
+        resolve();                                   // 动画结束，兑现 Promise
+      }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+await fadeOut(box);
+box.remove();
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：基于时间的 rAF 淡出</div>
+  <div class="b">
+    <div class="row">
+      <button id="raf-go">淡出（2 秒）</button>
+      <button id="raf-reset">复原</button>
+      <span class="hint" id="raf-fps"></span>
+    </div>
+    <div id="raf-box" style="margin-top:10px;height:70px;border-radius:10px;background:var(--accent);display:grid;place-items:center;color:#fff;font-weight:700">我会慢慢消失</div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 大多数时候你不需要手写 rAF 动画</div>
+  <p>
+    像淡入淡出这样的效果，CSS <code>transition</code> 或第 8 章的 <strong>Web Animations API</strong>（<code>element.animate()</code>）
+    更简单，而且浏览器可以把它们放到合成线程执行，性能更好。rAF 适合那些「每一帧都要用 JS 计算」的场景：Canvas 绘图、游戏循环、物理模拟。
+  </p>
+</div>
+
+<h2 id="r1-7"><span class="rn">1.7</span>把事件 API 包装成 Promise</h2>
+
+<p class="prob">你有一个基于事件的老 API，想把它包装成返回 Promise 的函数。</p>
+
+<p>
+  这个过程俗称 <strong>promisify（Promise 化）</strong>。套路永远是：在 <code>new Promise</code> 的构造函数里注册事件监听，
+  成功事件里调 <code>resolve</code>，失败事件里调 <code>reject</code>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="Promise 化：把事件映射到 resolve 和 reject">
+  <rect class="bx-d" x="20" y="20" width="440" height="160" rx="10"/>
+  <text class="mono" x="36" y="42">new Promise((resolve, reject) =&gt; { … })</text>
+
+  <rect class="bx" x="40" y="60" width="170" height="100" rx="8"/>
+  <text class="ttl" x="125" y="84" text-anchor="middle">XMLHttpRequest</text>
+  <text class="sm" x="125" y="104" text-anchor="middle">事件型的老 API</text>
+  <text class="sm" x="125" y="124" text-anchor="middle">load / error / timeout</text>
+  <text class="sm" x="125" y="142" text-anchor="middle">/ abort …</text>
+
+  <path class="ln-g" d="M212 86 H300" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="256" y="78" text-anchor="middle">load</text>
+  <rect class="bx-g" x="304" y="68" width="136" height="36" rx="8"/>
+  <text class="mono on-g" x="372" y="91" text-anchor="middle">resolve(data)</text>
+
+  <path class="ln-r" d="M212 134 H300" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="256" y="126" text-anchor="middle">error</text>
+  <rect class="bx-r" x="304" y="116" width="136" height="36" rx="8"/>
+  <text class="mono on-r" x="372" y="139" text-anchor="middle">reject(err)</text>
+
+  <path class="ln-a" d="M462 100 H540" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="544" y="66" width="196" height="68" rx="10"/>
+  <text class="ttl on-a" x="642" y="92" text-anchor="middle">loadJSON(url)</text>
+  <text class="sm" x="642" y="114" text-anchor="middle">调用方只看到一个 Promise</text>
+</svg>
+<figcaption>图 1-7　Promise 化：外面看是 Promise，里面还是事件</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="1-09-promisify-xmlhttprequest.js">
+<script type="text/plain">
+/**
+ * 向指定 URL 发 GET 请求，返回一个 Promise：
+ * 成功时得到解析后的 JSON 对象；出错或响应不是合法 JSON 时拒绝。
+ */
+function loadJSON(url) {
+  // 在 Promise 构造函数里做异步工作
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+
+    // 请求成功：解析 JSON，用结果兑现 Promise
+    request.addEventListener('load', event => {
+      // 响应体可能不是合法 JSON，所以包一层 try/catch
+      try {
+        resolve(JSON.parse(event.target.responseText));
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    // 请求失败：用错误拒绝 Promise
+    request.addEventListener('error', error => {
+      reject(error);
+    });
+
+    request.open('GET', url);
+    request.send();
+  });
+}
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="1-10-using-loadJSON.js">
+<script type="text/plain">
+// 用 then
+loadJSON('/api/users/1').then(user => {
+  console.log('Got user:', user);
+});
+
+// 用 await
+const user = await loadJSON('/api/users/1');
+console.log('Got user:', user);
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 已经返回 Promise 的 API，不要再包一层</div>
+  <p>
+    手动 <code>new Promise</code> 只用于包装事件或回调型 API。像 <code>fetch</code> 这种本身返回 Promise 的，直接用即可。
+    写成 <code>new Promise(resolve =&gt; fetch(url).then(resolve))</code> 是经典的「Promise 构造器反模式」——
+    多写了代码，还会把错误吞掉。实际上 <code>loadJSON</code> 今天只要一行：
+    <code>fetch(url).then(r =&gt; r.json())</code>（第 4 章详解）。
+  </p>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; <code>Promise.withResolvers()</code></div>
+  <p>
+    有时候 <code>resolve</code> 和 <code>reject</code> 需要在构造函数<em>外面</em>调用，以前得这样绕：
+    <code>let resolve; const p = new Promise(r =&gt; resolve = r);</code>。
+    ES2024 加入了 <code>Promise.withResolvers()</code>，一次拿到三件套。<span class="bl newly">Baseline 2024</span>
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+// 等用户点「确定」或「取消」
+function waitForChoice(okButton, cancelButton) {
+  const { promise, resolve } = Promise.withResolvers();
+  okButton.addEventListener('click', () => resolve(true), { once: true });
+  cancelButton.addEventListener('click', () => resolve(false), { once: true });
+  return promise;
+}
+
+if (await waitForChoice(ok, cancel)) { /* … */ }
+</script>
+  </div>
+</div>
+
+<h2 id="modern">现代补充：取消与超时</h2>
+
+<p>
+  Promise 一旦开始就无法「撤回」。但很多场景需要取消：用户离开了页面、搜索框又输入了新字、请求太慢要放弃。
+  浏览器提供的标准方案是 <strong><code>AbortController</code> / <code>AbortSignal</code></strong>，它贯穿了整个 Web 平台：
+  <code>fetch</code>、<code>addEventListener</code>、Web Streams、Web Locks 等都接受 <code>signal</code> 参数。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="AbortController 与 AbortSignal 的关系">
+  <rect class="bx-a" x="20" y="60" width="170" height="60" rx="10"/>
+  <text class="ttl on-a" x="105" y="85" text-anchor="middle">AbortController</text>
+  <text class="mono" x="105" y="105" text-anchor="middle">.abort()</text>
+
+  <path class="ln-a" d="M192 90 H250" marker-end="url(#ar-a)"/>
+  <rect class="bx-b" x="254" y="60" width="140" height="60" rx="10"/>
+  <text class="ttl on-b" x="324" y="85" text-anchor="middle">AbortSignal</text>
+  <text class="mono" x="324" y="105" text-anchor="middle">.signal</text>
+
+  <path class="ln-b" d="M396 76 L470 36" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M396 90 H470" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M396 104 L470 144" marker-end="url(#ar-b)"/>
+  <rect class="bx" x="474" y="16" width="266" height="36" rx="8"/>
+  <text class="mono" x="607" y="39" text-anchor="middle">fetch(url, { signal })</text>
+  <rect class="bx" x="474" y="72" width="266" height="36" rx="8"/>
+  <text class="mono" x="607" y="95" text-anchor="middle">addEventListener(…, { signal })</text>
+  <rect class="bx" x="474" y="128" width="266" height="36" rx="8"/>
+  <text class="mono" x="607" y="151" text-anchor="middle">你自己写的异步函数</text>
+  <text class="sm" x="105" y="146" text-anchor="middle">一个开关，同时取消一批操作</text>
+</svg>
+<figcaption>图 1-8　一个 controller 发号施令，所有拿着 signal 的操作一起停止</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 1. 手动取消
+const controller = new AbortController();
+fetch('/api/search?q=cat', { signal: controller.signal })
+  .catch(err => {
+    if (err.name === 'AbortError') console.log('请求被取消了');
+  });
+controller.abort();
+
+// 2. 超时自动取消：3 秒没回来就放弃
+const res = await fetch('/api/slow', { signal: AbortSignal.timeout(3000) });
+
+// 3. 组合多个信号：用户点取消 或 超时，哪个先到都停
+const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]);
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>API</th><th>作用</th><th>支持</th></tr>
+  <tr><td><code>AbortController</code></td><td>创建可手动取消的信号</td><td><span class="bl wide">广泛可用</span></td></tr>
+  <tr><td><code>AbortSignal.timeout(ms)</code></td><td>到时间自动取消（错误名为 <code>TimeoutError</code>）</td><td><span class="bl wide">广泛可用</span></td></tr>
+  <tr><td><code>AbortSignal.any([...])</code></td><td>任一信号取消即取消</td><td><span class="bl newly">Baseline 2024</span></td></tr>
+  <tr><td><code>Promise.withResolvers()</code></td><td>在外部拿到 resolve / reject</td><td><span class="bl newly">Baseline 2024</span></td></tr>
+  <tr><td><code>Promise.try(fn)</code></td><td>同步抛错也能变成被拒绝的 Promise</td><td><span class="bl newly">Baseline 2025</span></td></tr>
+</table>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 关于 Baseline 徽章</div>
+  <p>
+    本教程用 <strong>Baseline</strong> 标注浏览器支持情况（这是 W3C WebDX 社区组推出的统一口径）：
+    <span class="bl wide">广泛可用</span> 表示在 Chrome、Edge、Firefox、Safari 的主流版本上都已支持超过 30 个月；
+    <span class="bl newly">Baseline 20xx</span> 表示那一年刚在四大浏览器全部落地；
+    <span class="bl limited">有限支持</span> 表示还有浏览器没实现。上线前，请以
+    <a href="https://caniuse.com">caniuse.com</a> 和 <a href="https://developer.mozilla.org/zh-CN/">MDN</a> 的最新数据为准。
+  </p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>浏览器主线程只有一条，耗时操作都是异步的；通知结果的方式有回调、事件、Promise 三种。</li>
+  <li>Promise 只会从 pending 走向 fulfilled 或 rejected 之一，用 <code>then</code> / <code>catch</code> 或 <code>await</code> + <code>try/catch</code> 处理。</li>
+  <li><code>then</code> 返回新的 Promise，所以能链式调用；链尾一个 <code>catch</code> 兜住全链错误。</li>
+  <li>互不依赖的任务用 <code>Promise.all</code> 并行；需要逐个结果用 <code>allSettled</code>；还有 <code>race</code> 和 <code>any</code>。</li>
+  <li><code>requestAnimationFrame</code> 与屏幕刷新同步；动画进度应按经过时间计算，而不是按帧数。</li>
+  <li>用 <code>new Promise</code> 或 <code>Promise.withResolvers()</code> 包装事件型 API；用 <code>AbortSignal</code> 实现取消和超时。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>把 1.3 节的 <code>getPostTitles</code> 改写成 <code>async/await</code> 版本。</li>
+    <li>写一个 <code>delay(ms)</code> 函数，返回一个在 <code>ms</code> 毫秒后兑现的 Promise（提示：包装 <code>setTimeout</code>）。</li>
+    <li>用 <code>Promise.race</code> 和上一题的 <code>delay</code> 写一个 <code>withTimeout(promise, ms)</code>，超时就拒绝。再用 <code>AbortSignal.timeout</code> 实现同样的效果，比较两者的区别（提示：哪种能真正停止网络请求？）。</li>
+    <li>把 1.2 节的 <code>loadImage</code> 改成用布尔变量判断是否已切换过备用图，并用一个不存在的相对路径测试它不会死循环。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // ---- 组合器演示 ----
+  var out = document.getElementById('combinator-out');
+  var t0;
+  function log(msg) {
+    out.textContent += '[' + String(Math.round(performance.now() - t0)).padStart(4, ' ') + 'ms] ' + msg + '\n';
+  }
+  function task(name, ms, ok) {
+    return new Promise(function (resolve, reject) {
+      setTimeout(function () {
+        log(name + (ok ? ' 成功' : ' 失败'));
+        ok ? resolve(name) : reject(new Error(name + ' 出错'));
+      }, ms);
+    });
+  }
+  document.querySelectorAll('[data-combinator]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var kind = b.dataset.combinator;
+      out.textContent = '';
+      t0 = performance.now();
+      log('开始 Promise.' + kind + '([A, B, C])');
+      Promise[kind]([task('A', 300, true), task('B', 600, false), task('C', 900, true)])
+        .then(function (v) {
+          log('→ 兑现：' + JSON.stringify(v, function (k, x) { return x instanceof Error ? x.message : x; }));
+        })
+        .catch(function (e) {
+          log('→ 拒绝：' + (e instanceof AggregateError ? 'AggregateError（全部失败）' : e.message));
+        });
+    });
+  });
+
+  // ---- rAF 演示 ----
+  var box = document.getElementById('raf-box');
+  var info = document.getElementById('raf-fps');
+  var running = false;
+  document.getElementById('raf-go').addEventListener('click', function () {
+    if (running) return;
+    running = true;
+    var start, frames = 0;
+    function step(ts) {
+      if (start === undefined) start = ts;
+      frames++;
+      var p = Math.min((ts - start) / 2000, 1);
+      box.style.opacity = 1 - p;
+      if (p < 1) requestAnimationFrame(step);
+      else {
+        running = false;
+        info.textContent = '共渲染 ' + frames + ' 帧，约 ' + Math.round(frames / 2) + ' FPS（取决于你的屏幕刷新率）';
+      }
+    }
+    requestAnimationFrame(step);
+  });
+  document.getElementById('raf-reset').addEventListener('click', function () {
+    box.style.opacity = 1; info.textContent = '';
+  });
+})();
+</script>
+</body>
+</html>
