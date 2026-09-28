@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 21 章 · Web Worker 与主线程 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .jank-track { position: relative; height: 34px; border: 1px dashed var(--line-2); border-radius: 8px; background: var(--panel-2); margin-top: 10px; overflow: hidden; }
+  .jank-ball { position: absolute; top: 5px; left: 0; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); }
+</style>
+</head>
+<body data-chapter="21">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 21 章 · 补充篇</span>
+<h1>Web Worker 与主线程</h1>
+<p class="lede">
+  第 1 章说过：浏览器里的 JavaScript 只有<strong>一条主线程</strong>，它既要跑你的代码，又要响应点击、绘制页面。
+  网络请求可以交给浏览器在后台等待，可是如果是你自己的代码要<strong>算</strong>很久（处理大文件、压缩图片、解析巨大的 JSON），
+  主线程就会被堵住，页面直接「卡死」。这一章讲怎么识别这种问题，以及两种解法：把活挪到 Worker 线程，或者把活切碎、给主线程喘息的机会。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解事件循环：任务、微任务与渲染的顺序，以及「长任务」为什么会导致卡顿</li>
+    <li>创建 Web Worker，用 <code>postMessage</code> 与它通信</li>
+    <li>把 Worker 包装成返回 Promise 的函数</li>
+    <li>用「可转移对象」零拷贝地传递大块二进制数据</li>
+    <li>把长任务切片，用 <code>scheduler.yield()</code> 等方式让出主线程</li>
+    <li>了解模块 Worker、OffscreenCanvas、SharedWorker 与 Comlink</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">事件循环：主线程在忙什么</h2>
+
+<p>
+  主线程的工作方式像一个只有一个窗口的办事大厅：所有事情（你的脚本、事件回调、定时器回调、页面绘制）都要排队，<strong>一次只办一件</strong>。
+  这个「取一件事 → 办完 → 再取下一件」的过程叫<strong>事件循环</strong>（event loop）。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="事件循环：任务、微任务与渲染">
+  <rect class="bx-b" x="20" y="30" width="180" height="150" rx="12"/>
+  <text class="ttl on-b" x="110" y="54" text-anchor="middle">任务队列</text>
+  <rect class="bx" x="36" y="68" width="148" height="26" rx="5"/><text class="sm" x="110" y="86" text-anchor="middle">click 回调</text>
+  <rect class="bx" x="36" y="100" width="148" height="26" rx="5"/><text class="sm" x="110" y="118" text-anchor="middle">setTimeout 回调</text>
+  <rect class="bx" x="36" y="132" width="148" height="26" rx="5"/><text class="sm" x="110" y="150" text-anchor="middle">message 事件 …</text>
+
+  <path class="ln-b" d="M202 100 H256" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="229" y="92" text-anchor="middle">① 取一个</text>
+
+  <rect class="bx-a" x="260" y="60" width="160" height="80" rx="12"/>
+  <text class="ttl on-a" x="340" y="92" text-anchor="middle">执行任务</text>
+  <text class="sm" x="340" y="114" text-anchor="middle">期间不能做别的</text>
+
+  <path class="ln-p" d="M422 100 H476" marker-end="url(#ar-p)"/>
+  <text class="sm on-p" x="449" y="92" text-anchor="middle">② 清空</text>
+  <rect class="bx-p" x="480" y="60" width="120" height="80" rx="12"/>
+  <text class="ttl on-p" x="540" y="88" text-anchor="middle">微任务</text>
+  <text class="sm" x="540" y="108" text-anchor="middle">Promise.then</text>
+  <text class="sm" x="540" y="124" text-anchor="middle">await 之后的代码</text>
+
+  <path class="ln-g" d="M602 100 H636" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="620" y="90" text-anchor="middle">③</text>
+  <rect class="bx-g" x="640" y="40" width="100" height="120" rx="12"/>
+  <text class="ttl on-g" x="690" y="64" text-anchor="middle">渲染</text>
+  <text class="sm" x="690" y="86" text-anchor="middle">rAF 回调</text>
+  <text class="sm" x="690" y="104" text-anchor="middle">样式计算</text>
+  <text class="sm" x="690" y="122" text-anchor="middle">布局 · 绘制</text>
+  <text class="sm" x="690" y="146" text-anchor="middle">（约每 16ms）</text>
+
+  <path class="ln-d" d="M690 162 V210 H110 V182" marker-end="url(#ar)"/>
+  <text class="sm" x="400" y="226" text-anchor="middle">④ 回到任务队列，周而复始</text>
+  <text class="sm on-r" x="380" y="262" text-anchor="middle">如果第 ① 步的任务跑了 2 秒，这 2 秒里没有渲染、没有响应点击 —— 用户看到的就是「卡死」</text>
+  <text class="sm" x="380" y="282" text-anchor="middle">超过 50ms 的任务被称为「长任务」（long task），它是第 15 章 INP 指标变差的首要原因</text>
+</svg>
+<figcaption>图 21-1　事件循环：一次一个任务，任务之间清空微任务，并在合适时机渲染</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; 异步 ≠ 不阻塞</div>
+  <p>
+    <code>fetch</code> 在等待网络时不占用主线程，因为等待是浏览器在后台完成的。但 Promise 和 <code>async/await</code> 本身<strong>不会</strong>把计算移到别的线程：
+    <code>await</code> 之后的代码依然在主线程上执行。一段需要 2 秒的循环，写在 <code>async</code> 函数里也照样卡 2 秒。
+  </p>
+</div>
+
+<h2 id="r21-1"><span class="rn">21.1</span>识别长任务</h2>
+
+<p class="prob">点击一个按钮后，页面冻住了几秒：动画停止、输入框打不了字。你想确认原因。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 一个耗时的纯计算：统计 limit 以内有多少个质数
+function countPrimes(limit) {
+  let count = 0;
+  for (let n = 2; n <= limit; n++) {
+    let isPrime = true;
+    for (let d = 2; d * d <= n; d++) {
+      if (n % d === 0) { isPrime = false; break; }
+    }
+    if (isPrime) count++;
+  }
+  return count;
+}
+
+button.addEventListener('click', () => {
+  result.textContent = '计算中…';        // 这行字其实显示不出来！
+  result.textContent = countPrimes(3_000_000);
+});
+</script>
+</div>
+
+<p>
+  注意第一行：「计算中…」<strong>根本来不及显示</strong>。因为渲染要等当前任务结束才会发生，而当前任务紧接着就开始了几秒的计算。
+  用第 15 章的工具可以发现这类问题：开发者工具「性能」面板中带红色三角的长条就是长任务；也可以用代码监听：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+new PerformanceObserver(list => {
+  for (const entry of list.getEntries()) {
+    console.warn(`长任务 ${Math.round(entry.duration)}ms`, entry);
+  }
+}).observe({ type: 'longtask', buffered: true });   // Chromium 支持
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：同一个计算，三种执行方式（观察小球和输入框）</div>
+  <div class="b">
+    <div class="row">
+      <button id="run-main">① 在主线程计算</button>
+      <button id="run-worker">② 在 Worker 中计算</button>
+      <button id="run-yield">③ 主线程切片 + 让出</button>
+    </div>
+    <div class="jank-track"><div class="jank-ball" id="ball"></div></div>
+    <div class="row"><input id="jank-input" placeholder="计算期间试着在这里打字" style="flex:1"></div>
+    <div class="out" id="jank-out" style="min-height:0">计算 500 万以内的质数个数。小球由 requestAnimationFrame 驱动，主线程一忙它就停。</div>
+  </div>
+</div>
+
+<h2 id="r21-2"><span class="rn">21.2</span>创建 Web Worker</h2>
+
+<p class="prob">把耗时的计算放到后台线程，让主线程保持流畅。</p>
+
+<p>
+  <strong>Web Worker</strong> 是一个在独立线程中运行的脚本。它和页面<strong>不共享变量</strong>，双方只能通过「发消息」沟通：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="主线程与 Worker 通过消息通信">
+  <rect class="bx-b" x="20" y="20" width="300" height="210" rx="14"/>
+  <text class="ttl on-b" x="170" y="46" text-anchor="middle">主线程（main.js）</text>
+  <text class="sm" x="170" y="66" text-anchor="middle">DOM、事件、渲染</text>
+  <text class="mono" x="36" y="100" style="font-size:11.5px">const worker = new Worker(</text>
+  <text class="mono" x="36" y="118" style="font-size:11.5px">  'primes.js');</text>
+  <text class="mono on-a" x="36" y="148" style="font-size:11.5px">worker.postMessage(data)</text>
+  <text class="mono on-g" x="36" y="186" style="font-size:11.5px">worker.onmessage = e =&gt;</text>
+  <text class="mono on-g" x="36" y="204" style="font-size:11.5px">  show(e.data)</text>
+
+  <rect class="bx-p" x="440" y="20" width="300" height="210" rx="14"/>
+  <text class="ttl on-p" x="590" y="46" text-anchor="middle">Worker 线程（primes.js）</text>
+  <text class="sm" x="590" y="66" text-anchor="middle">没有 DOM，专心计算</text>
+  <text class="mono on-a" x="456" y="110" style="font-size:11.5px">self.onmessage = e =&gt; {</text>
+  <text class="mono" x="456" y="132" style="font-size:11.5px">  const r = heavy(e.data);</text>
+  <text class="mono on-g" x="456" y="160" style="font-size:11.5px">  self.postMessage(r);</text>
+  <text class="mono" x="456" y="182" style="font-size:11.5px">};</text>
+
+  <path class="ln-a" d="M322 144 H436" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="380" y="136" text-anchor="middle">消息（复制）</text>
+  <path class="ln-g" d="M436 170 H322" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="380" y="190" text-anchor="middle">结果（复制）</text>
+</svg>
+<figcaption>图 21-2　两个线程各跑各的，靠 postMessage 传递数据</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="demo/worker/primes.js（Worker 端）">
+<script type="text/plain">
+function countPrimes(limit) { /* 同 21.1 节 */ }
+
+// Worker 里的全局对象是 self（不是 window）
+self.addEventListener('message', event => {
+  const { id, limit } = event.data;
+  const start = performance.now();
+  const count = countPrimes(limit);
+  self.postMessage({ id, count, ms: performance.now() - start });
+});
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="main.js（页面端）">
+<script type="text/plain">
+const worker = new Worker('demo/worker/primes.js');
+
+worker.addEventListener('message', event => {
+  result.textContent = `共 ${event.data.count} 个质数，用时 ${Math.round(event.data.ms)}ms`;
+});
+
+worker.addEventListener('error', event => {
+  console.error('Worker 出错：', event.message);
+});
+
+button.addEventListener('click', () => {
+  result.textContent = '计算中…';          // 这次能显示出来了
+  worker.postMessage({ id: 1, limit: 3_000_000 });
+});
+
+// 不再需要时终止它，释放线程
+// worker.terminate();
+</script>
+</div>
+
+<h3>Worker 里能用什么？</h3>
+
+<div class="tw">
+<table>
+  <tr><th>可以用</th><th>不能用</th></tr>
+  <tr>
+    <td><code>fetch</code>、WebSocket、IndexedDB（第 4、5 章）<br><code>setTimeout</code>、<code>performance</code>、<code>crypto</code><br><code>Intl</code>（第 11 章）、<code>TextEncoder</code><br>OffscreenCanvas、WebAssembly<br>再创建子 Worker</td>
+    <td><code>document</code>、任何 DOM 元素<br><code>window</code>（全局对象是 <code>self</code>）<br><code>localStorage</code> / <code>sessionStorage</code>（第 2 章）<br><code>alert</code>、<code>confirm</code></td>
+  </tr>
+</table>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 需要通过 HTTP 加载</div>
+  <p>
+    Worker 脚本必须与页面<strong>同源</strong>。直接双击打开本地 HTML（<code>file://</code>）时，大多数浏览器会拒绝创建 Worker，
+    请用本地开发服务器（如 <code>npx serve</code>）或部署后再测试。
+  </p>
+</div>
+
+<h2 id="r21-3"><span class="rn">21.3</span>把 Worker 包装成 Promise</h2>
+
+<p class="prob">每次都写 <code>postMessage</code> + <code>onmessage</code> 太麻烦，而且同时发出多个请求时，回来的结果分不清是哪个请求的。你想要 <code>const n = await countPrimesInWorker(1e6)</code>。</p>
+
+<p>
+  关键是给每条消息编一个 <strong>id</strong>，Worker 回复时原样带回；页面用一个 <code>Map</code> 记住每个 id 对应的 resolve 函数。
+  这与第 1 章的 promisify、第 13 章的确认对话框是同一种思路：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="用 id 把请求和回复对应起来">
+  <rect class="bx-a" x="20" y="30" width="230" height="140" rx="12"/>
+  <text class="ttl on-a" x="135" y="54" text-anchor="middle">pending: Map</text>
+  <text class="mono" x="36" y="84" style="font-size:11.5px">1 → resolve①</text>
+  <text class="mono" x="36" y="108" style="font-size:11.5px">2 → resolve②</text>
+  <text class="mono" x="36" y="132" style="font-size:11.5px">3 → resolve③</text>
+  <path class="ln-a" d="M252 70 H500" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="376" y="62" text-anchor="middle" style="font-size:11px">{ id: 1 } { id: 2 } { id: 3 }</text>
+  <rect class="bx-p" x="504" y="40" width="236" height="110" rx="12"/>
+  <text class="ttl on-p" x="622" y="66" text-anchor="middle">Worker</text>
+  <text class="sm" x="622" y="88" text-anchor="middle">处理顺序、完成时间不确定</text>
+  <path class="ln-g" d="M500 126 H252" marker-end="url(#ar-g)"/>
+  <text class="mono on-g" x="376" y="146" text-anchor="middle" style="font-size:11px">{ id: 2, … } 先回来 → pending.get(2)(结果)</text>
+  <text class="sm" x="380" y="190" text-anchor="middle">凭 id 找到对应的 resolve，兑现正确的那个 Promise，然后从 Map 中删除</text>
+</svg>
+<figcaption>图 21-3　「请求 id + 等待表」：把消息通信变成 Promise</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const worker = new Worker('demo/worker/primes.js');
+const pending = new Map();   // id → { resolve, reject }
+let nextId = 1;
+
+worker.addEventListener('message', event => {
+  const { id, ...result } = event.data;
+  pending.get(id)?.resolve(result);
+  pending.delete(id);
+});
+
+worker.addEventListener('error', event => {
+  // Worker 内部未捕获的异常：让所有等待中的 Promise 失败
+  for (const { reject } of pending.values()) reject(new Error(event.message));
+  pending.clear();
+});
+
+function countPrimesInWorker(limit) {
+  const { promise, resolve, reject } = Promise.withResolvers();   // 第 1 章
+  const id = nextId++;
+  pending.set(id, { resolve, reject });
+  worker.postMessage({ id, limit });
+  return promise;
+}
+
+// 用起来就像普通的异步函数
+const { count, ms } = await countPrimesInWorker(3_000_000);
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 现成的封装：Comlink</div>
+  <p>
+    Google Chrome 团队维护的 <a href="https://github.com/GoogleChromeLabs/comlink">Comlink</a>（约 1 KB）把这套机制做到了极致：
+    Worker 中 <code>Comlink.expose({ countPrimes })</code>，页面中 <code>const api = Comlink.wrap(worker)</code>，
+    之后直接 <code>await api.countPrimes(1e6)</code>，完全感觉不到消息的存在。
+  </p>
+</div>
+
+<h2 id="r21-4"><span class="rn">21.4</span>高效传递大块数据：可转移对象</h2>
+
+<p class="prob">要把一个 100 MB 的图片像素数组或音频数据交给 Worker 处理，复制一遍就要花不少时间和内存。</p>
+
+<p>
+  <code>postMessage</code> 默认使用<strong>结构化克隆</strong>（第 2、5 章提到过）：把数据完整<strong>复制</strong>一份给对方。
+  对于 <code>ArrayBuffer</code>、<code>MessagePort</code>、<code>ImageBitmap</code>、<code>OffscreenCanvas</code> 等<strong>可转移对象</strong>，
+  还可以选择<strong>转移所有权</strong>：内存直接「过户」给对方，瞬间完成，原来的变量随即失效。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="结构化克隆与转移所有权的区别">
+  <text class="ttl on-a" x="20" y="24">复制（默认）</text>
+  <rect class="bx-b" x="20" y="36" width="160" height="56" rx="10"/><text class="lbl on-b" x="100" y="60" text-anchor="middle">主线程</text><text class="mono" x="100" y="80" text-anchor="middle" style="font-size:11px">buf: 100MB</text>
+  <path class="ln-a" d="M182 64 H300" marker-end="url(#ar-a)"/><text class="sm on-a" x="241" y="56" text-anchor="middle">逐字节复制</text>
+  <rect class="bx-p" x="304" y="36" width="160" height="56" rx="10"/><text class="lbl on-p" x="384" y="60" text-anchor="middle">Worker</text><text class="mono" x="384" y="80" text-anchor="middle" style="font-size:11px">副本: 100MB</text>
+  <text class="sm" x="490" y="60">耗时随数据量增长</text>
+  <text class="sm" x="490" y="78">内存峰值 200MB</text>
+
+  <text class="ttl on-g" x="20" y="130">转移（transfer）</text>
+  <rect class="bx-b" x="20" y="142" width="160" height="56" rx="10"/><text class="lbl on-b" x="100" y="166" text-anchor="middle">主线程</text><text class="mono on-r" x="100" y="186" text-anchor="middle" style="font-size:11px">buf.byteLength = 0</text>
+  <path class="ln-g" d="M182 170 H300" marker-end="url(#ar-g)"/><text class="sm on-g" x="241" y="162" text-anchor="middle">只交换「钥匙」</text>
+  <rect class="bx-p" x="304" y="142" width="160" height="56" rx="10"/><text class="lbl on-p" x="384" y="166" text-anchor="middle">Worker</text><text class="mono" x="384" y="186" text-anchor="middle" style="font-size:11px">buf: 100MB</text>
+  <text class="sm" x="490" y="166">几乎零耗时</text>
+  <text class="sm" x="490" y="184">原变量被「掏空」（detached）</text>
+</svg>
+<figcaption>图 21-4　复制 vs 转移：转移之后，发送方不能再使用这块内存</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const pixels = new Uint8ClampedArray(4 * 4000 * 3000);   // 约 48MB 的图片像素
+
+// 第二个参数列出要「转移」而不是复制的对象
+worker.postMessage({ pixels }, [pixels.buffer]);
+
+console.log(pixels.byteLength);   // 0 —— 已经交给 Worker，这边不能再用了
+
+// Worker 处理完，同样可以转移回来
+// self.postMessage({ pixels }, [pixels.buffer]);
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：复制与转移 64MB 数据的耗时对比（用 structuredClone 模拟 postMessage）</div>
+  <div class="b">
+    <div class="row"><button id="tr-run">运行对比</button></div>
+    <div class="out" id="tr-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 什么不能传？</div>
+  <p>
+    结构化克隆不能处理函数、DOM 节点、类实例的方法（只会保留数据属性）和 Symbol。传递这些会抛出 <code>DataCloneError</code>。
+    所以 Worker 通信的「接口」应该设计成纯数据：对象、数组、字符串、数字、<code>Date</code>、<code>Map</code>、<code>Blob</code>、<code>ArrayBuffer</code>……
+  </p>
+</div>
+
+<h2 id="r21-5"><span class="rn">21.5</span>不用 Worker：切片并让出主线程</h2>
+
+<p class="prob">有些工作必须在主线程完成（比如要操作 DOM 的批量更新），没法放进 Worker，但又不想让页面卡住。</p>
+
+<p>办法是把一个大任务<strong>切成许多小段</strong>，每做完一段就主动「让出」主线程，让浏览器有机会渲染和响应用户输入：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="长任务与切片任务在时间线上的对比">
+  <text class="ttl on-r" x="20" y="24">一个长任务</text>
+  <rect class="bx-r" x="20" y="36" width="560" height="34" rx="4"/>
+  <text class="sm on-r" x="300" y="58" text-anchor="middle">countPrimes(3_000_000) —— 2000ms 内无法渲染、无法响应点击</text>
+  <rect class="bx-g" x="584" y="36" width="30" height="34" rx="4"/><text class="sm on-g" x="640" y="58">渲染</text>
+
+  <text class="ttl on-g" x="20" y="104">切片 + 让出</text>
+  <g>
+    <rect class="bx-a" x="20" y="116" width="60" height="34" rx="4"/><rect class="bx-g" x="82" y="116" width="14" height="34" rx="3"/>
+    <rect class="bx-a" x="98" y="116" width="60" height="34" rx="4"/><rect class="bx-g" x="160" y="116" width="14" height="34" rx="3"/>
+    <rect class="bx-a" x="176" y="116" width="60" height="34" rx="4"/><rect class="bx-b" x="238" y="116" width="20" height="34" rx="3"/>
+    <rect class="bx-a" x="260" y="116" width="60" height="34" rx="4"/><rect class="bx-g" x="322" y="116" width="14" height="34" rx="3"/>
+    <rect class="bx-a" x="338" y="116" width="60" height="34" rx="4"/><rect class="bx-g" x="400" y="116" width="14" height="34" rx="3"/>
+    <text class="sm" x="430" y="138">……</text>
+  </g>
+  <text class="sm on-a" x="50" y="170" text-anchor="middle">一小段</text>
+  <text class="sm on-g" x="89" y="186" text-anchor="middle">渲染</text>
+  <text class="sm on-b" x="248" y="170" text-anchor="middle">响应点击</text>
+  <text class="sm" x="600" y="138">总时间略长，但页面始终可交互</text>
+</svg>
+<figcaption>图 21-5　把一个大任务切碎，中间穿插渲染和用户输入</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 让出主线程：优先用 scheduler.yield()，不支持时退回 setTimeout
+function yieldToMain() {
+  if (globalThis.scheduler?.yield) return scheduler.yield();
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+async function countPrimesChunked(limit, onProgress) {
+  let count = 0;
+  let lastYield = performance.now();
+
+  for (let n = 2; n <= limit; n++) {
+    if (isPrime(n)) count++;
+
+    // 每工作大约 10ms 就让出一次，避免产生长任务
+    if (performance.now() - lastYield > 10) {
+      onProgress?.(n / limit);
+      await yieldToMain();
+      lastYield = performance.now();
+    }
+  }
+  return count;
+}
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>让出方式</th><th>特点</th><th>支持</th></tr>
+  <tr><td><code>await scheduler.yield()</code></td><td>让出后<strong>优先</strong>回到你的任务（排在其他普通任务前面），专为此场景设计</td><td><span class="bl limited">Chromium 已支持，其他浏览器在推进</span></td></tr>
+  <tr><td><code>setTimeout(fn, 0)</code></td><td>到处可用；但会排到队尾，嵌套多层后浏览器会强制至少延迟 4ms</td><td><span class="bl wide">广泛可用</span></td></tr>
+  <tr><td><code>requestIdleCallback(fn)</code></td><td>在浏览器空闲时执行，适合「不急」的工作（预加载、统计上报）</td><td><span class="bl limited">Safari 尚未默认支持</span></td></tr>
+  <tr><td><code>requestAnimationFrame</code></td><td>在下一次渲染前执行；适合与画面相关的分批更新（第 1 章）</td><td><span class="bl wide">广泛可用</span></td></tr>
+</table>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; Worker 还是切片？</div>
+  <ul>
+    <li><strong>纯计算、数据量大、耗时长</strong>（图像处理、压缩、加密、解析大文件、搜索索引）→ Worker。计算完全不占主线程，总耗时也更短。</li>
+    <li><strong>必须操作 DOM</strong>、或者任务本身不算太重、只是偶尔超过 50ms → 切片 + 让出。</li>
+    <li>两者可以结合：Worker 负责算，主线程分批把结果渲染出来。</li>
+  </ul>
+</div>
+
+<h2 id="r21-6"><span class="rn">21.6</span>更多类型的 Worker</h2>
+
+<h3>模块 Worker</h3>
+
+<p>传入 <code>{ type: 'module' }</code>，Worker 内部就可以使用 <code>import</code> / <code>export</code>，与项目的其他代码共享模块。<span class="bl newly">Baseline 2023</span></p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 用 import.meta.url 计算路径，打包工具（Vite、webpack）也能正确识别
+const worker = new Worker(new URL('./image-worker.js', import.meta.url), { type: 'module' });
+
+// image-worker.js 中：
+// import { blur } from './filters.js';
+</script>
+</div>
+
+<h3>OffscreenCanvas：在 Worker 中绘图</h3>
+
+<p>
+  第 18 章的视频滤镜、复杂的图表渲染都可以整个搬进 Worker：把画布的控制权转移过去，Worker 里绘制，页面上直接显示结果。<span class="bl newly">Baseline 2023</span>
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const offscreen = document.querySelector('canvas').transferControlToOffscreen();
+worker.postMessage({ canvas: offscreen }, [offscreen]);   // OffscreenCanvas 是可转移对象
+
+// Worker 中：
+// self.onmessage = ({ data }) => {
+//   const ctx = data.canvas.getContext('2d');
+//   function draw() { /* … */ requestAnimationFrame(draw); }   // Worker 中也有 rAF
+//   draw();
+// };
+</script>
+</div>
+
+<h3>三种 Worker 的对比</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="Dedicated Worker、Shared Worker、Service Worker 的对比">
+  <rect class="bx-p" x="20" y="20" width="230" height="170" rx="12"/>
+  <text class="ttl on-p" x="135" y="44" text-anchor="middle">Dedicated Worker</text>
+  <text class="mono" x="135" y="64" text-anchor="middle" style="font-size:11px">new Worker()</text>
+  <text class="sm" x="135" y="92" text-anchor="middle">属于创建它的那一个页面</text>
+  <text class="sm" x="135" y="110" text-anchor="middle">页面关闭它就结束</text>
+  <text class="sm on-p" x="135" y="140" text-anchor="middle">用途：后台计算（本章）</text>
+  <text class="sm" x="135" y="170" text-anchor="middle"><tspan class="on-g">广泛可用</tspan></text>
+
+  <rect class="bx-b" x="265" y="20" width="230" height="170" rx="12"/>
+  <text class="ttl on-b" x="380" y="44" text-anchor="middle">Shared Worker</text>
+  <text class="mono" x="380" y="64" text-anchor="middle" style="font-size:11px">new SharedWorker()</text>
+  <text class="sm" x="380" y="92" text-anchor="middle">同源的多个标签页共用一个</text>
+  <text class="sm" x="380" y="110" text-anchor="middle">通过 port 通信</text>
+  <text class="sm on-b" x="380" y="140" text-anchor="middle">用途：多标签页共享一条连接</text>
+  <text class="sm" x="380" y="170" text-anchor="middle"><tspan class="on-a">移动端支持不完整</tspan></text>
+
+  <rect class="bx-g" x="510" y="20" width="230" height="170" rx="12"/>
+  <text class="ttl on-g" x="625" y="44" text-anchor="middle">Service Worker</text>
+  <text class="mono" x="625" y="64" text-anchor="middle" style="font-size:11px">navigator.serviceWorker</text>
+  <text class="sm" x="625" y="92" text-anchor="middle">位于页面与网络之间的代理</text>
+  <text class="sm" x="625" y="110" text-anchor="middle">页面关闭后仍可被唤醒</text>
+  <text class="sm on-g" x="625" y="140" text-anchor="middle">用途：离线、缓存、推送</text>
+  <text class="sm" x="625" y="170" text-anchor="middle">详见第 22 章</text>
+</svg>
+<figcaption>图 21-6　名字都叫 Worker，用途完全不同</figcaption>
+</figure>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>主线程一次只做一件事；超过 50ms 的长任务会阻塞渲染和输入。<code>async/await</code> 不会把计算移出主线程。</li>
+  <li><code>new Worker(url)</code> 创建后台线程；双方用 <code>postMessage</code> / <code>message</code> 事件通信，Worker 中没有 DOM 和 localStorage。</li>
+  <li>用「请求 id + Map」把 Worker 通信包装成 Promise，或者直接使用 Comlink。</li>
+  <li>大块二进制数据用可转移对象零拷贝传递，转移后原变量失效。</li>
+  <li>不能用 Worker 时，把任务切片，用 <code>scheduler.yield()</code>（降级为 <code>setTimeout</code>）定期让出主线程。</li>
+  <li>模块 Worker 支持 import；OffscreenCanvas 让绘图也能离开主线程。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>把第 11 章的「字数统计」改成在 Worker 中进行，粘贴一整本小说（几 MB 文本）测试页面是否依然流畅。</li>
+    <li>做一个图片灰度化工具：用第 10 章读取图片，<code>getImageData</code> 取出像素后转移给 Worker 处理，处理完转移回来显示。对比复制与转移的耗时。</li>
+    <li>给 21.3 节的封装加上超时：Worker 5 秒没回复就拒绝 Promise（提示：<code>Promise.race</code> 或 <code>AbortSignal.timeout</code>）。</li>
+    <li>渲染一个 20000 行的列表：先一次性插入，再改为每批 500 行 + <code>yieldToMain()</code>，用第 15 章的 PerformanceObserver 统计两种方式产生的长任务。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var LIMIT = 5000000;
+  var out = document.getElementById('jank-out'), ball = document.getElementById('ball');
+  var buttons = ['run-main', 'run-worker', 'run-yield'].map(function (id) { return document.getElementById(id); });
+  function busy(b) { buttons.forEach(function (x) { x.disabled = b; }); }
+
+  // 由 rAF 驱动的小球：主线程被占用时就会停住
+  var x = 0, dir = 1;
+  (function tick() {
+    var w = ball.parentElement.clientWidth - 28;
+    x += dir * 3; if (x > w) { x = w; dir = -1; } if (x < 0) { x = 0; dir = 1; }
+    ball.style.transform = 'translateX(' + x + 'px)';
+    requestAnimationFrame(tick);
+  })();
+
+  function isPrime(n) { for (var d = 2; d * d <= n; d++) if (n % d === 0) return false; return true; }
+  function countPrimes(limit) { var c = 0; for (var n = 2; n <= limit; n++) if (isPrime(n)) c++; return c; }
+
+  document.getElementById('run-main').onclick = function () {
+    busy(true);
+    out.textContent = '① 主线程计算中……（你大概看不到这行字）';
+    setTimeout(function () {                       // 先让上面的文字有机会显示
+      var t0 = performance.now(), c = countPrimes(LIMIT);
+      out.textContent = '① 主线程：' + c + ' 个质数，用时 ' + Math.round(performance.now() - t0) + 'ms —— 这段时间里小球停住了，输入框也没反应';
+      busy(false);
+    }, 50);
+  };
+
+  var worker = null;
+  try { worker = new Worker('demo/worker/primes.js'); } catch (e) { worker = null; }
+  document.getElementById('run-worker').onclick = function () {
+    if (!worker) { out.textContent = '无法创建 Worker（直接打开本地文件时浏览器会禁止；部署后或使用本地服务器即可）'; return; }
+    busy(true);
+    out.textContent = '② Worker 计算中……小球照常滚动，输入框可以打字';
+    var t0 = performance.now();
+    worker.onmessage = function (e) {
+      out.textContent = '② Worker：' + e.data.count + ' 个质数，Worker 内计算 ' + Math.round(e.data.ms) + 'ms，总计 ' + Math.round(performance.now() - t0) + 'ms，主线程全程空闲';
+      busy(false);
+    };
+    worker.onerror = function (e) { out.textContent = 'Worker 出错：' + (e.message || '无法加载脚本（请通过 http 访问）'); busy(false); e.preventDefault(); };
+    worker.postMessage({ id: 1, limit: LIMIT });
+  };
+
+  function yieldToMain() {
+    if (window.scheduler && scheduler.yield) return scheduler.yield();
+    return new Promise(function (r) { setTimeout(r, 0); });
+  }
+  document.getElementById('run-yield').onclick = async function () {
+    busy(true);
+    var t0 = performance.now(), last = t0, c = 0, yields = 0;
+    for (var n = 2; n <= LIMIT; n++) {
+      if (isPrime(n)) c++;
+      if ((n & 1023) === 0 && performance.now() - last > 10) {
+        out.textContent = '③ 切片计算中… ' + Math.round(n / LIMIT * 100) + '%（每 ~10ms 让出一次，使用 ' + (window.scheduler && scheduler.yield ? 'scheduler.yield()' : 'setTimeout') + '）';
+        yields++; await yieldToMain(); last = performance.now();
+      }
+    }
+    out.textContent = '③ 切片：' + c + ' 个质数，总用时 ' + Math.round(performance.now() - t0) + 'ms，共让出 ' + yields + ' 次 —— 略慢，但页面一直可交互';
+    busy(false);
+  };
+
+  // 复制 vs 转移
+  document.getElementById('tr-run').onclick = function () {
+    var o = document.getElementById('tr-out');
+    var buf1 = new ArrayBuffer(64 * 1024 * 1024);
+    var t0 = performance.now(); var copy = structuredClone(buf1); var t1 = performance.now();
+    var buf2 = new ArrayBuffer(64 * 1024 * 1024);
+    var t2 = performance.now(); var moved = structuredClone(buf2, { transfer: [buf2] }); var t3 = performance.now();
+    o.textContent =
+      '复制：structuredClone(buf)                     ' + (t1 - t0).toFixed(1) + ' ms，之后原 buf.byteLength = ' + buf1.byteLength + '\n' +
+      '转移：structuredClone(buf, { transfer: [buf] }) ' + (t3 - t2).toFixed(1) + ' ms，之后原 buf.byteLength = ' + buf2.byteLength + '（已被掏空）\n' +
+      '新对象大小：' + (copy.byteLength / 1048576) + 'MB / ' + (moved.byteLength / 1048576) + 'MB';
+  };
+})();
+</script>
+</body>
+</html>

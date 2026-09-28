@@ -13,13 +13,14 @@
 <main>
 
 <div class="hero">
-  <span class="chapter-eyebrow">面向初学者的 19 章教程</span>
+  <span class="chapter-eyebrow">面向初学者 · 19 章正文 + 3 章补充篇</span>
   <h1>Web API 实战：用浏览器原生能力写应用</h1>
   <p class="sub">
     这套教程改编自 O'Reilly 的《Web API Cookbook: Level Up Your JavaScript Applications》（Joe Attardi 著，2024）。
     原书的「配方」结构被完整保留 —— 每一节都从一个具体问题出发，给出代码，再解释原理 ——
     同时按照 <strong>2026 年的浏览器现状</strong>做了全面更新：标注每个 API 的 Baseline 支持状态，补充这两年新落地的能力，
     修正了原书和配套代码中的 30 多处错误，并为每一章绘制了图解、加入了可以直接在页面上运行的小实验。
+    此外还新增了原书没有的 3 章补充篇：事件系统、Web Worker、Service Worker 与 PWA。
   </p>
   <p style="margin-top:14px">
     <span class="pill">Promise / async</span><span class="pill">Fetch</span><span class="pill">IndexedDB</span>
@@ -83,6 +84,12 @@
 <figcaption>图 0-1　本教程涉及的 Web API 全景</figcaption>
 </figure>
 
+<p>
+  <strong>第七部分 · 补充篇</strong>（第 20–22 章）补上了原书没有、但现代 Web 开发绕不开的三块基础：
+  <a href="ch20.html">事件系统深入</a>、<a href="ch21.html">Web Worker 与主线程</a>、<a href="ch22.html">Service Worker 与 PWA</a>。
+  这三章的示例代码由本教程编写，第 22 章还附带一个可以真正离线运行的<a href="demo/pwa/">演示应用</a>。
+</p>
+
 <div class="cards">
   <div class="card"><span class="ic">&#128230;</span><h4>更少的依赖</h4><p>以前要靠 jQuery、Moment.js、Axios、各种 UI 库完成的事，今天很多已是浏览器内置能力。</p></div>
   <div class="card"><span class="ic">&#9889;</span><h4>更快的页面</h4><p>原生 API 不占用下载体积，由浏览器用 C++ / Rust 实现，通常比 JS 库更快。</p></div>
@@ -136,23 +143,30 @@
 <h3>学习路线</h3>
 
 <figure>
-<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="推荐的学习路线">
-  <rect class="bx-a" x="20" y="50" width="140" height="64" rx="10"/>
-  <text class="ttl on-a" x="90" y="76" text-anchor="middle">第 1 章</text>
-  <text class="sm" x="90" y="96" text-anchor="middle">异步基础（必读）</text>
-  <path class="ln-a" d="M162 82 H206" marker-end="url(#ar-a)"/>
-  <rect class="bx-b" x="210" y="50" width="160" height="64" rx="10"/>
-  <text class="ttl on-b" x="290" y="76" text-anchor="middle">第 2 – 5 章</text>
-  <text class="sm" x="290" y="96" text-anchor="middle">存储、URL、网络</text>
-  <path class="ln" d="M372 82 H416" marker-end="url(#ar)"/>
-  <rect class="bx-g" x="420" y="50" width="160" height="64" rx="10"/>
-  <text class="ttl on-g" x="500" y="76" text-anchor="middle">第 6 – 18 章</text>
-  <text class="sm" x="500" y="96" text-anchor="middle">按兴趣任意顺序阅读</text>
-  <path class="ln" d="M582 82 H626" marker-end="url(#ar)"/>
-  <rect class="bx-p" x="630" y="50" width="110" height="64" rx="10"/>
-  <text class="ttl on-p" x="685" y="76" text-anchor="middle">第 19 章</text>
-  <text class="sm" x="685" y="96" text-anchor="middle">总结与展望</text>
-  <text class="sm" x="380" y="150" text-anchor="middle">第 12 章（Web Components）之后再读第 13 章效果更好；第 15、16 章是调试和优化的工具箱，随时查阅</text>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="推荐的学习路线">
+  <rect class="bx-a" x="20" y="44" width="120" height="64" rx="10"/>
+  <text class="ttl on-a" x="80" y="70" text-anchor="middle">第 1 章</text>
+  <text class="sm" x="80" y="90" text-anchor="middle">异步基础</text>
+  <path class="ln-a" d="M142 76 H166" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="170" y="44" width="120" height="64" rx="10"/>
+  <text class="ttl on-a" x="230" y="70" text-anchor="middle">第 20 章</text>
+  <text class="sm" x="230" y="90" text-anchor="middle">事件系统</text>
+  <path class="ln" d="M292 76 H316" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="320" y="44" width="130" height="64" rx="10"/>
+  <text class="ttl on-b" x="385" y="70" text-anchor="middle">第 2 – 5 章</text>
+  <text class="sm" x="385" y="90" text-anchor="middle">存储、URL、网络</text>
+  <path class="ln" d="M452 76 H476" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="480" y="44" width="140" height="64" rx="10"/>
+  <text class="ttl on-g" x="550" y="70" text-anchor="middle">第 6–18、21、22 章</text>
+  <text class="sm" x="550" y="90" text-anchor="middle">按兴趣任意顺序</text>
+  <path class="ln" d="M622 76 H646" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="650" y="44" width="90" height="64" rx="10"/>
+  <text class="ttl on-p" x="695" y="70" text-anchor="middle">第 19 章</text>
+  <text class="sm" x="695" y="90" text-anchor="middle">总结展望</text>
+  <text class="sm" x="155" y="30" text-anchor="middle">两章必读的基础</text>
+  <path class="ln-d" d="M20 36 H290"/>
+  <text class="sm" x="380" y="142" text-anchor="middle">第 12 章（Web Components）之后再读第 13 章效果更好；第 21、22 章建议在读完第 4、5 章之后阅读</text>
+  <text class="sm" x="380" y="162" text-anchor="middle">第 15、16 章是调试和优化的工具箱，随时查阅</text>
 </svg>
 <figcaption>图 0-2　推荐的阅读顺序</figcaption>
 </figure>
@@ -172,7 +186,7 @@
   <div class="t">&#128161; 一句话总结</div>
   <p>
     在引入一个库之前，先问一句：<strong>浏览器自己能不能做到？</strong>
-    —— 这套教程的 19 章，就是在一遍遍回答这个问题。
+    —— 这套教程的 22 章，就是在一遍遍回答这个问题。
   </p>
 </div>
 

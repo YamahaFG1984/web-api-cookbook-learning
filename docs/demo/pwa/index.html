@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>离线演示 · 第 22 章 Service Worker 与 PWA</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#d95602">
+<link rel="stylesheet" href="../../assets/style.css">
+<style>
+  main { max-width: 820px; }
+  .out { white-space: pre-wrap; font-family: var(--mono); font-size: 13px; line-height: 1.65; background: var(--code-bg); color: var(--code-fg);
+         border-radius: 8px; padding: 10px 12px; margin: 8px 0 18px; min-height: 40px; max-height: 260px; overflow: auto; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  button { font: inherit; font-size: 14px; font-weight: 600; padding: 6px 14px; border-radius: 7px; border: 1px solid var(--line-2);
+           background: var(--panel-2); color: var(--fg); cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent-2); }
+</style>
+</head>
+<body>
+<main>
+  <span class="chapter-eyebrow">第 22 章 · 在线演示</span>
+  <h1><img src="icon.svg" alt="" width="36" height="36" style="vertical-align:-6px"> 离线演示应用</h1>
+  <p class="lede">
+    这个页面注册了一个 Service Worker（<code>sw.js</code>），它只控制 <code>demo/pwa/</code> 目录。
+    按下面的步骤体验「断网也能打开」的网页。
+  </p>
+
+  <div class="box key">
+    <div class="t">&#128273; 体验步骤</div>
+    <ol>
+      <li>打开本页后稍等片刻，确认下方「当前页面是否被控制」显示为「是」（sw.js 在 activate 时调用了 <code>clients.claim()</code>，所以首次打开就会被接管；如果显示「否」，刷新一次即可）。</li>
+      <li>打开开发者工具 → Network（网络）面板 → 把「No throttling」改为 <strong>Offline</strong>（离线）。</li>
+      <li>再刷新页面：页面照常显示，样式也在 —— 它们来自缓存。</li>
+      <li>在离线状态下访问 <a href="not-cached.html">一个没有缓存过的页面</a>，会看到 Service Worker 返回的离线提示页。</li>
+      <li>开发者工具 → Application（应用）→ Service Workers / Cache Storage 中可以看到它的状态和缓存。</li>
+    </ol>
+  </div>
+
+  <h3>网络状态</h3>
+  <div class="out" id="net"></div>
+
+  <h3>Service Worker 状态</h3>
+  <div class="out" id="sw">检查中……</div>
+
+  <div id="update" class="box new" hidden>
+    <div class="t">&#10024; 有新版本可用</div>
+    <p>新的 Service Worker 已下载并处于 waiting 状态。</p>
+    <button id="update-btn" type="button">立即更新</button>
+  </div>
+
+  <h3>Cache Storage 中的内容</h3>
+  <div class="out" id="cache"></div>
+  <div class="row">
+    <button id="refresh-cache" type="button">刷新缓存列表</button>
+    <button id="install" type="button" hidden>📲 安装为应用</button>
+    <button id="reset" type="button">注销 Service Worker 并清空缓存</button>
+  </div>
+
+  <h3>事件日志</h3>
+  <div class="out" id="log"></div>
+
+  <p><a href="../../ch22.html">← 返回第 22 章</a></p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 20 章 · 事件系统深入 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .ev-box { border: 2px solid; border-radius: 10px; padding: 12px 14px 14px; font-size: 13px; font-weight: 700; }
+  .ev-outer { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
+  .ev-middle { border-color: var(--green); background: var(--green-bg); color: var(--green); margin-top: 6px; }
+  .ev-inner { border-color: var(--accent); background: var(--accent-bg); color: var(--accent-2); margin-top: 6px; cursor: pointer; text-align: center; padding: 16px; }
+  .ev-flash { outline: 3px solid var(--purple); outline-offset: 2px; }
+  .todo-list { list-style: none; padding: 0; margin: 8px 0 0; }
+  .todo-list li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin: 4px 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+  .todo-list li.done span { text-decoration: line-through; color: var(--fg-faint); }
+  .todo-list li span { flex: 1; }
+  .todo-list .del { padding: 1px 8px !important; font-size: 12px !important; }
+  #pad { width: 100%; height: 220px; border: 1px dashed var(--line-2); border-radius: 8px; background: var(--panel-2); touch-action: none; display: block; cursor: crosshair; }
+  .kbd-input { width: 100%; }
+</style>
+</head>
+<body data-chapter="20">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 20 章 · 补充篇</span>
+<h1>事件系统深入</h1>
+<p class="lede">
+  前面 19 章几乎每一章都在写 <code>addEventListener</code>，但一直没有停下来讲清楚：一次点击发生后，事件是怎样在 DOM 树里「旅行」的？
+  为什么在父元素上监听也能收到子元素的点击？<code>preventDefault</code> 和 <code>stopPropagation</code> 有什么区别？
+  这一章把事件系统从头梳理一遍。它是全书的「前置知识」，推荐读完第 1 章后就来读。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; 关于补充篇</div>
+  <p>第 20–22 章是原书没有的补充内容，示例代码由本教程编写，结构与前面各章保持一致：问题 → 代码 → 图解 → 在线实验。</p>
+</div>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解事件传播的三个阶段：捕获、目标、冒泡</li>
+    <li>分清 <code>preventDefault</code>、<code>stopPropagation</code>、<code>stopImmediatePropagation</code></li>
+    <li>用事件委托处理大量、动态增减的元素</li>
+    <li>用 Pointer Events 统一处理鼠标、触屏和手写笔</li>
+    <li>正确处理键盘事件，包括中文输入法的「组字」过程</li>
+    <li>让自己的对象也能派发事件，并掌握 <code>once</code>、<code>passive</code>、<code>signal</code> 等监听选项</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">事件对象与三个阶段</h2>
+
+<p>
+  当用户点击页面上的一个按钮时，浏览器会创建一个<strong>事件对象</strong>（这里是 <code>PointerEvent</code>），然后让它沿着 DOM 树走一个来回：
+  先从 <code>window</code> 一路<strong>向下</strong>到被点击的元素，再从那里一路<strong>向上</strong>回到 <code>window</code>。沿途每个节点上的监听器都有机会处理它。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="事件传播的捕获、目标、冒泡三个阶段">
+  <rect class="bx" x="280" y="14" width="200" height="36" rx="8"/><text class="mono" x="380" y="37" text-anchor="middle">window</text>
+  <rect class="bx" x="280" y="70" width="200" height="36" rx="8"/><text class="mono" x="380" y="93" text-anchor="middle">document</text>
+  <rect class="bx" x="280" y="126" width="200" height="36" rx="8"/><text class="mono" x="380" y="149" text-anchor="middle">&lt;body&gt;</text>
+  <rect class="bx" x="280" y="182" width="200" height="36" rx="8"/><text class="mono" x="380" y="205" text-anchor="middle">&lt;ul id="list"&gt;</text>
+  <rect class="bx-a" x="280" y="238" width="200" height="40" rx="8"/><text class="mono on-a" x="380" y="263" text-anchor="middle">&lt;button&gt; ← 点击</text>
+  <path class="ln" d="M380 52 V68 M380 108 V124 M380 164 V180 M380 220 V236"/>
+
+  <path class="ln-b" d="M250 30 V250" marker-end="url(#ar-b)" style="stroke-width:3"/>
+  <text class="ttl on-b" x="236" y="120" text-anchor="end">① 捕获阶段</text>
+  <text class="sm" x="236" y="140" text-anchor="end">从外到内</text>
+  <text class="mono" x="236" y="160" text-anchor="end" style="font-size:11px">{ capture: true }</text>
+  <text class="sm" x="236" y="176" text-anchor="end">的监听器在这时执行</text>
+
+  <path class="ln-g" d="M510 250 V30" marker-end="url(#ar-g)" style="stroke-width:3"/>
+  <text class="ttl on-g" x="524" y="120">③ 冒泡阶段</text>
+  <text class="sm" x="524" y="140">从内到外</text>
+  <text class="sm" x="524" y="160">普通监听器（默认）</text>
+  <text class="sm" x="524" y="176">在这时执行</text>
+
+  <text class="ttl on-a" x="380" y="304" text-anchor="middle">② 目标阶段：到达 event.target</text>
+  <text class="sm" x="380" y="322" text-anchor="middle">event.eventPhase：1 = 捕获，2 = 目标，3 = 冒泡</text>
+</svg>
+<figcaption>图 20-1　一次点击事件的完整旅程：先向下（捕获），再向上（冒泡）</figcaption>
+</figure>
+
+<p>事件对象上最常用的几个属性：</p>
+
+<dl class="terms">
+  <dt>event.type</dt><dd>事件名，如 <code>'click'</code></dd>
+  <dt>event.target</dt><dd>事件<strong>真正发生</strong>在哪个元素上（被点击的最内层元素）</dd>
+  <dt>event.currentTarget</dt><dd>当前正在执行的这个监听器<strong>挂在</strong>哪个元素上。冒泡过程中 target 不变，currentTarget 一路变化</dd>
+  <dt>event.eventPhase</dt><dd>当前处于哪个阶段</dd>
+  <dt>event.bubbles</dt><dd>这个事件会不会冒泡。大多数会，但 <code>focus</code>、<code>blur</code>、<code>mouseenter</code>、<code>load</code> 等不会</dd>
+  <dt>event.isTrusted</dt><dd>是用户真实操作产生的（<code>true</code>），还是代码 <code>dispatchEvent</code> 出来的（<code>false</code>）</dd>
+</dl>
+
+<h2 id="r20-1"><span class="rn">20.1</span>观察冒泡与捕获</h2>
+
+<p class="prob">你在父元素和子元素上都注册了点击监听器，想知道它们的执行顺序。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const outer = document.querySelector('#outer');
+const inner = document.querySelector('#inner');
+
+// 默认（第三个参数省略或 false）：冒泡阶段执行
+outer.addEventListener('click', () => console.log('outer 冒泡'));
+inner.addEventListener('click', () => console.log('inner 目标'));
+
+// capture: true：捕获阶段执行
+outer.addEventListener('click', () => console.log('outer 捕获'), { capture: true });
+
+// 点击 inner，输出顺序：
+// outer 捕获 → inner 目标 → outer 冒泡
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：点击最里面的方块，观察事件经过的顺序</div>
+  <div class="b">
+    <div class="ev-box ev-outer" id="ev-outer">outer（外层）
+      <div class="ev-box ev-middle" id="ev-middle">middle（中层）
+        <div class="ev-box ev-inner" id="ev-inner">inner（点我）</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="hint"><input type="checkbox" id="ev-stop"> 在 middle 的冒泡监听器里调用 stopPropagation()</label>
+    </div>
+    <div class="out" id="ev-out" style="min-height:0">每个方块都注册了一个捕获监听器和一个冒泡监听器</div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 什么时候会用到捕获阶段？</div>
+  <p>
+    日常开发中 99% 的监听器都在冒泡阶段。捕获阶段适合「必须抢在所有人之前处理」的场景，比如全局的埋点统计、
+    在任何子组件处理之前拦截某些点击。另外，<code>focus</code> / <code>blur</code> 不冒泡，但可以在父元素上用捕获阶段监听到（或者改用会冒泡的 <code>focusin</code> / <code>focusout</code>）。
+  </p>
+</div>
+
+<h2 id="r20-2"><span class="rn">20.2</span>阻止默认行为与阻止传播</h2>
+
+<p class="prob">点击链接时不想跳转、按回车时不想提交表单，或者不想让父元素收到子元素的点击。</p>
+
+<p>这是两件<strong>完全不同</strong>的事，初学者经常混淆：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="preventDefault 与 stopPropagation 的区别">
+  <rect class="bx-a" x="20" y="20" width="350" height="190" rx="12"/>
+  <text class="ttl on-a" x="195" y="44" text-anchor="middle">event.preventDefault()</text>
+  <text class="sm" x="195" y="66" text-anchor="middle">取消浏览器的「默认动作」</text>
+  <text class="sm" x="40" y="96">· 链接 → 不跳转</text>
+  <text class="sm" x="40" y="116">· 表单 submit → 不提交、不刷新</text>
+  <text class="sm" x="40" y="136">· 拖放 drop → 不打开文件（第 10 章）</text>
+  <text class="sm" x="40" y="156">· 复选框 click → 不切换勾选</text>
+  <text class="sm on-a" x="40" y="186">事件照样冒泡，父元素照样收到</text>
+
+  <rect class="bx-b" x="390" y="20" width="350" height="190" rx="12"/>
+  <text class="ttl on-b" x="565" y="44" text-anchor="middle">event.stopPropagation()</text>
+  <text class="sm" x="565" y="66" text-anchor="middle">阻止事件继续「旅行」</text>
+  <text class="sm" x="410" y="96">· 后续节点上的监听器收不到</text>
+  <text class="sm" x="410" y="116">· 当前节点上的其他监听器仍会执行</text>
+  <text class="sm" x="410" y="136">  （要连它们也阻止，用</text>
+  <text class="mono" x="410" y="154" style="font-size:11px">  stopImmediatePropagation()）</text>
+  <text class="sm on-b" x="410" y="186">默认动作照样发生（链接照样跳转）</text>
+</svg>
+<figcaption>图 20-2　一个管「浏览器做什么」，一个管「谁能听到」</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 只阻止跳转：父元素仍然能收到这次点击（比如埋点统计）
+link.addEventListener('click', event => {
+  event.preventDefault();
+  openInModal(link.href);
+});
+
+// 检查默认动作是否已经被别人取消
+if (event.defaultPrevented) { /* … */ }
+
+// 不是所有事件都能取消：event.cancelable 为 false 时，preventDefault() 无效
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 慎用 stopPropagation</div>
+  <p>
+    阻止传播会让上层的代码「失聪」：比如「点击页面空白处关闭菜单」的逻辑、分析工具的全局点击统计、事件委托，都依赖冒泡。
+    很多诡异的「点了没反应」bug 都来自某处随手写的 <code>stopPropagation()</code>。
+    多数时候，你真正想要的其实是在上层判断 <code>event.target</code>，而不是切断传播。
+  </p>
+</div>
+
+<h2 id="r20-3"><span class="rn">20.3</span>事件委托</h2>
+
+<p class="prob">一个列表有成百上千项，而且会动态增删。给每一项单独绑定监听器既浪费内存，又要在新增时记得补绑定。</p>
+
+<p>既然事件会冒泡，就只在<strong>父元素上监听一次</strong>，再根据 <code>event.target</code> 判断点的是哪一项。这叫<strong>事件委托</strong>（event delegation），第 12 章的反馈组件也用过：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="事件委托：只在父元素上监听一次">
+  <rect class="bx-g" x="20" y="20" width="330" height="180" rx="12"/>
+  <text class="ttl on-g" x="185" y="44" text-anchor="middle">&lt;ul&gt; ← 唯一的监听器</text>
+  <rect class="bx" x="40" y="58" width="290" height="30" rx="6"/><text class="sm" x="52" y="78">&lt;li&gt; 买牛奶 [删除]</text>
+  <rect class="bx" x="40" y="94" width="290" height="30" rx="6"/><text class="sm" x="52" y="114">&lt;li&gt; 写作业 [删除]</text>
+  <rect class="bx-a" x="40" y="130" width="290" height="30" rx="6"/><text class="sm on-a" x="52" y="150">&lt;li&gt; 新加的一项 [删除] ← 点击</text>
+  <text class="sm" x="185" y="186" text-anchor="middle">新增的项自动生效，不用补绑定</text>
+  <path class="ln-a" d="M330 145 C 380 145, 380 36, 352 36" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="386" y="96">冒泡</text>
+
+  <rect class="bx" x="420" y="40" width="320" height="140" rx="10"/>
+  <text class="mono" x="436" y="66" style="font-size:11.5px">list.addEventListener('click', e =&gt; {</text>
+  <text class="mono" x="436" y="88" style="font-size:11.5px">  const btn = e.target.closest('.del');</text>
+  <text class="mono" x="436" y="110" style="font-size:11.5px">  if (!btn) return;</text>
+  <text class="mono" x="436" y="132" style="font-size:11.5px">  btn.closest('li').remove();</text>
+  <text class="mono" x="436" y="154" style="font-size:11.5px">});</text>
+</svg>
+<figcaption>图 20-3　1000 个列表项，1 个监听器</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const list = document.querySelector('#todo-list');
+
+list.addEventListener('click', event => {
+  // 用 closest 向上查找：即使点中的是按钮里的图标 <svg>，也能找到按钮本身
+  const deleteButton = event.target.closest('.del');
+  if (deleteButton && list.contains(deleteButton)) {
+    deleteButton.closest('li').remove();
+    return;
+  }
+
+  const item = event.target.closest('li');
+  if (item) item.classList.toggle('done');
+});
+</script>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 为什么用 closest 而不是直接比较 event.target？</div>
+  <p>
+    <code>event.target</code> 是被点中的<strong>最内层</strong>元素。如果按钮里有 <code>&lt;span&gt;</code> 或图标，点到它们时 target 就不是按钮了。
+    <code>element.closest(选择器)</code> 从自身开始向上找第一个匹配的祖先，完美解决这个问题。
+    加上 <code>list.contains(...)</code> 判断，可以防止匹配到列表外面的同名元素。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：委托的待办列表（点文字切换完成，点按钮删除）</div>
+  <div class="b">
+    <div class="row"><input id="todo-input" placeholder="新待办" style="flex:1"><button id="todo-add">添加</button></div>
+    <ul class="todo-list" id="todo-list">
+      <li><span>买牛奶</span><button class="del" type="button">删除</button></li>
+      <li><span>读完第 20 章</span><button class="del" type="button">删除</button></li>
+    </ul>
+    <p class="hint">整个列表只有一个 click 监听器。</p>
+  </div>
+</div>
+
+<h2 id="r20-4"><span class="rn">20.4</span>用 Pointer Events 统一处理鼠标、触屏和手写笔</h2>
+
+<p class="prob">你要做一个画板：电脑上用鼠标画，手机上用手指画，平板上用手写笔画，还想利用笔的压感。</p>
+
+<p>
+  过去要分别写 <code>mousedown/mousemove/mouseup</code> 和 <code>touchstart/touchmove/touchend</code> 两套代码，逻辑还不一样（触摸事件有多个触点）。
+  <strong>Pointer Events</strong> 把它们统一成一套：<span class="bl wide">Baseline 广泛可用</span>
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="Pointer Events 统一了三种输入设备">
+  <rect class="bx" x="20" y="20" width="150" height="44" rx="8"/><text class="lbl" x="95" y="47" text-anchor="middle">🖱 鼠标</text>
+  <rect class="bx" x="20" y="84" width="150" height="44" rx="8"/><text class="lbl" x="95" y="111" text-anchor="middle">👆 手指触摸</text>
+  <rect class="bx" x="20" y="148" width="150" height="44" rx="8"/><text class="lbl" x="95" y="175" text-anchor="middle">✏️ 手写笔</text>
+  <path class="ln" d="M172 42 L276 96" marker-end="url(#ar)"/>
+  <path class="ln" d="M172 106 H276" marker-end="url(#ar)"/>
+  <path class="ln" d="M172 170 L276 116" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="280" y="60" width="200" height="92" rx="12"/>
+  <text class="ttl on-a" x="380" y="84" text-anchor="middle">PointerEvent</text>
+  <text class="mono" x="380" y="106" text-anchor="middle" style="font-size:11px">pointerdown / move / up</text>
+  <text class="mono" x="380" y="124" text-anchor="middle" style="font-size:11px">pointercancel</text>
+  <text class="mono" x="380" y="142" text-anchor="middle" style="font-size:11px">pointerenter / leave</text>
+  <path class="ln-a" d="M482 106 H526" marker-end="url(#ar-a)"/>
+  <rect class="bx" x="530" y="30" width="210" height="160" rx="10"/>
+  <text class="ttl" x="635" y="52" text-anchor="middle">额外信息</text>
+  <text class="mono" x="546" y="78" style="font-size:11px">pointerType</text><text class="sm" x="640" y="78">mouse/touch/pen</text>
+  <text class="mono" x="546" y="100" style="font-size:11px">pointerId</text><text class="sm" x="640" y="100">区分多个手指</text>
+  <text class="mono" x="546" y="122" style="font-size:11px">pressure</text><text class="sm" x="640" y="122">压感 0 ~ 1</text>
+  <text class="mono" x="546" y="144" style="font-size:11px">tiltX / tiltY</text><text class="sm" x="640" y="144">笔的倾斜角</text>
+  <text class="mono" x="546" y="166" style="font-size:11px">isPrimary</text><text class="sm" x="640" y="166">是否主触点</text>
+</svg>
+<figcaption>图 20-4　一套事件，三种设备</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const canvas = document.querySelector('#pad');
+const ctx = canvas.getContext('2d');
+let drawing = false;
+
+canvas.addEventListener('pointerdown', event => {
+  drawing = true;
+  // 指针捕获：即使手指 / 鼠标移出了画布，后续的 move 和 up 事件仍然发给画布
+  canvas.setPointerCapture(event.pointerId);
+  ctx.beginPath();
+  ctx.moveTo(event.offsetX, event.offsetY);
+});
+
+canvas.addEventListener('pointermove', event => {
+  if (!drawing) return;
+  // 笔的压力越大线越粗；鼠标的 pressure 在按下时固定为 0.5
+  ctx.lineWidth = 1 + event.pressure * 8;
+  ctx.lineTo(event.offsetX, event.offsetY);
+  ctx.stroke();
+});
+
+// pointerup：正常抬起；pointercancel：被系统打断（如来电、手势被浏览器接管）
+['pointerup', 'pointercancel'].forEach(type =>
+  canvas.addEventListener(type, () => { drawing = false; }));
+</script>
+</div>
+
+<div class="code" data-lang="css">
+<script type="text/plain">
+#pad {
+  /* 关键！告诉浏览器：这个元素上的触摸不要用于滚动、缩放，交给我的代码处理 */
+  touch-action: none;
+}
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 别忘了 touch-action</div>
+  <p>
+    在触屏设备上，浏览器会把手指拖动当作「滚动页面」，并触发 <code>pointercancel</code>，你的画板就画不出线。
+    CSS 的 <code>touch-action: none</code> 告诉浏览器把触摸交给你处理。只想禁止横向拖动时，可以写 <code>touch-action: pan-y</code>（仍允许竖向滚动）。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：画板（鼠标、手指、手写笔都可以）</div>
+  <div class="b">
+    <canvas id="pad"></canvas>
+    <div class="row"><button id="pad-clear">清空</button><span class="hint" id="pad-info">pointerType / pressure 会显示在这里</span></div>
+  </div>
+</div>
+
+<h2 id="r20-5"><span class="rn">20.5</span>键盘事件</h2>
+
+<p class="prob">实现快捷键（如 Ctrl+S 保存）、在输入框里按回车发送消息，而且要兼容中文输入法。</p>
+
+<h3>key 与 code</h3>
+
+<div class="tw">
+<table>
+  <tr><th>属性</th><th>含义</th><th>按 A 键（英文）</th><th>按 A 键 + Shift</th><th>德语键盘上按 Z 所在位置</th></tr>
+  <tr><td><code>event.key</code></td><td>这次按键「产生了什么字符 / 功能」</td><td><code>'a'</code></td><td><code>'A'</code></td><td><code>'y'</code></td></tr>
+  <tr><td><code>event.code</code></td><td>按下的是键盘上「哪个物理位置」的键</td><td><code>'KeyA'</code></td><td><code>'KeyA'</code></td><td><code>'KeyZ'</code></td></tr>
+</table>
+</div>
+
+<p>
+  判断「用户想输入什么」用 <code>key</code>（如 <code>'Enter'</code>、<code>'Escape'</code>、<code>'ArrowUp'</code>）；
+  游戏里的 WASD 方向键这类「按位置」的需求才用 <code>code</code>。旧的 <code>keyCode</code>、<code>which</code> 已经废弃，不要再用。
+  修饰键通过 <code>event.ctrlKey</code>、<code>metaKey</code>（Mac 的 ⌘）、<code>shiftKey</code>、<code>altKey</code> 判断。
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+document.addEventListener('keydown', event => {
+  // Windows 用 Ctrl+S，Mac 用 ⌘+S
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault();   // 阻止浏览器弹出「保存网页」
+    saveDocument();
+  }
+});
+</script>
+</div>
+
+<h3>中文输入法的陷阱：isComposing</h3>
+
+<p>
+  用拼音输入法打字时，敲下的字母先进入「组字」状态（候选框），这时按回车通常是<strong>确认候选词</strong>，而不是发送消息。
+  如果直接监听 Enter，用户选词时消息就被误发出去了 —— 这是中文用户最常遇到的网页 bug 之一。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="输入法组字过程中的事件序列">
+  <path class="ln" d="M20 100 H740" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="30" y="60" width="150" height="40" rx="6"/><text class="mono on-b" x="105" y="85" text-anchor="middle">compositionstart</text>
+  <rect class="bx-d" x="190" y="60" width="300" height="40" rx="6"/><text class="sm" x="340" y="80" text-anchor="middle">输入 n-i-h-a-o，候选框：你好 / 拟好 …</text><text class="mono" x="340" y="96" text-anchor="middle" style="font-size:10.5px">keydown 的 isComposing === true</text>
+  <rect class="bx-r" x="500" y="60" width="90" height="40" rx="6"/><text class="sm on-r" x="545" y="85" text-anchor="middle">按 Enter 选词</text>
+  <rect class="bx-g" x="600" y="60" width="140" height="40" rx="6"/><text class="mono on-g" x="670" y="85" text-anchor="middle">compositionend</text>
+  <text class="sm on-r" x="545" y="130" text-anchor="middle">这次 Enter 不能当作「发送」！</text>
+  <text class="sm" x="380" y="36" text-anchor="middle">「组字」期间的所有按键都属于输入法，而不是你的页面</text>
+  <text class="sm on-g" x="380" y="170" text-anchor="middle">判断方法：if (event.isComposing) return;</text>
+</svg>
+<figcaption>图 20-5　中文、日文、韩文输入法都有「组字」阶段</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+messageInput.addEventListener('keydown', event => {
+  // 输入法组字中：这次按键属于输入法，不处理
+  // （keyCode 229 是部分旧版 Safari 的兼容判断）
+  if (event.isComposing || event.keyCode === 229) return;
+
+  if (event.key === 'Enter' && !event.shiftKey) {   // Shift+Enter 换行
+    event.preventDefault();
+    sendMessage(messageInput.value);
+  }
+});
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：键盘事件查看器（切换到中文输入法打几个字，再按回车）</div>
+  <div class="b">
+    <input class="kbd-input" id="kbd-input" placeholder="在这里按键……">
+    <div class="out" id="kbd-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 监听文字变化，用 input 而不是 keydown</div>
+  <p>
+    想在「输入框内容变化」时做事（实时搜索、字数统计），应该监听 <code>input</code> 事件：粘贴、拖放、语音输入、输入法上屏都会触发它，
+    而 <code>keydown</code> 只关心按键。在内容改变<strong>之前</strong>拦截，可以用 <code>beforeinput</code>，它的 <code>event.inputType</code> 告诉你是插入、删除还是粘贴。
+  </p>
+</div>
+
+<h2 id="r20-6"><span class="rn">20.6</span>让自己的对象派发事件</h2>
+
+<p class="prob">你写了一个数据存储对象，希望界面能「订阅」它的变化，而不必把界面代码塞进存储对象里。</p>
+
+<p>
+  浏览器的 <code>EventTarget</code> 是可以直接继承的。继承之后，你的对象就拥有了和 DOM 元素一模一样的 <code>addEventListener</code>、<code>dispatchEvent</code> —— 不需要任何「事件发射器」库：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+class TodoStore extends EventTarget {
+  #items = [];
+
+  add(text) {
+    const item = { id: crypto.randomUUID(), text };
+    this.#items.push(item);
+    // CustomEvent 的 detail 可以携带任意数据
+    this.dispatchEvent(new CustomEvent('change', { detail: { type: 'add', item } }));
+  }
+
+  get items() { return [...this.#items]; }
+}
+
+const store = new TodoStore();
+
+// 界面订阅变化
+store.addEventListener('change', event => {
+  console.log(event.detail.type, event.detail.item);
+  render(store.items);
+});
+
+store.add('学习 EventTarget');
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="数据对象通过事件通知多个订阅者">
+  <rect class="bx-a" x="20" y="50" width="200" height="70" rx="12"/>
+  <text class="ttl on-a" x="120" y="76" text-anchor="middle">TodoStore</text>
+  <text class="sm" x="120" y="96" text-anchor="middle">extends EventTarget</text>
+  <path class="ln-a" d="M222 85 H296" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="259" y="76" text-anchor="middle" style="font-size:11px">'change'</text>
+  <rect class="bx-g" x="300" y="20" width="200" height="36" rx="8"/><text class="sm on-g" x="400" y="43" text-anchor="middle">列表视图：重新渲染</text>
+  <rect class="bx-g" x="300" y="66" width="200" height="36" rx="8"/><text class="sm on-g" x="400" y="89" text-anchor="middle">计数器：更新数字</text>
+  <rect class="bx-g" x="300" y="112" width="200" height="36" rx="8"/><text class="sm on-g" x="400" y="135" text-anchor="middle">localStorage：保存</text>
+  <text class="sm" x="520" y="70">数据层不知道有谁在听，</text>
+  <text class="sm" x="520" y="90">视图层也不用轮询 ——</text>
+  <text class="sm" x="520" y="110">这就是「观察者模式」</text>
+</svg>
+<figcaption>图 20-6　EventTarget 让任何对象都能「广播」变化</figcaption>
+</figure>
+
+<h2 id="r20-7"><span class="rn">20.7</span>监听选项与移除监听</h2>
+
+<p class="prob">监听器只需要执行一次、需要一次性移除一批监听器，或者滚动时监听 touch 事件导致页面卡顿。</p>
+
+<div class="tw">
+<table>
+  <tr><th>选项</th><th>作用</th><th>典型场景</th></tr>
+  <tr><td><code>{ once: true }</code></td><td>执行一次后自动移除</td><td>等待一次 <code>transitionend</code>、第 13 章的 <code>close</code> 事件</td></tr>
+  <tr><td><code>{ capture: true }</code></td><td>在捕获阶段执行</td><td>20.1 节</td></tr>
+  <tr><td><code>{ passive: true }</code></td><td>承诺不会调用 <code>preventDefault()</code></td><td><code>touchmove</code>、<code>wheel</code>：浏览器不必等你的代码执行完再滚动，滚动更流畅</td></tr>
+  <tr><td><code>{ signal }</code></td><td><code>AbortController.abort()</code> 时自动移除</td><td>组件销毁时一次性清理所有监听（第 1 章）</td></tr>
+</table>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 匿名函数无法移除</div>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+button.addEventListener('click', () => doSomething());
+button.removeEventListener('click', () => doSomething());   // ✗ 无效：这是另一个新函数
+
+const handler = () => doSomething();
+button.addEventListener('click', handler);
+button.removeEventListener('click', handler);                // ✓ 同一个函数引用
+
+// 更省心：用 AbortController，不需要保存函数引用
+const controller = new AbortController();
+button.addEventListener('click', () => doSomething(), { signal: controller.signal });
+window.addEventListener('resize', onResize, { signal: controller.signal });
+controller.abort();   // 两个监听一起移除
+</script>
+  </div>
+  <p>
+    另外，<code>removeEventListener</code> 的 <code>capture</code> 选项必须与添加时一致，否则同样移除不掉。
+    忘记移除监听器，是单页应用内存泄漏的主要原因之一（比如组件销毁了，<code>window</code> 上的 resize 监听还引用着它）。
+  </p>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; passive 的默认值</div>
+  <p>
+    为了让滚动更流畅，主流浏览器会把注册在 <code>window</code>、<code>document</code>、<code>body</code> 上的 <code>touchstart</code>、<code>touchmove</code>、<code>wheel</code> 监听器<strong>默认视为 passive</strong>。
+    所以在这些监听器里调用 <code>preventDefault()</code> 会被忽略（并在控制台警告）。确实需要阻止滚动时，显式传入 <code>{ passive: false }</code>，
+    或者更好的办法：用 20.4 节的 CSS <code>touch-action</code>。
+  </p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>事件传播分三个阶段：捕获（外 → 内）、目标、冒泡（内 → 外）；默认监听器在冒泡阶段执行。</li>
+  <li><code>target</code> 是事件发生的元素，<code>currentTarget</code> 是监听器所在的元素。</li>
+  <li><code>preventDefault</code> 取消浏览器的默认动作；<code>stopPropagation</code> 阻止传播 —— 两者无关，后者要慎用。</li>
+  <li>事件委托：在父元素上监听一次，用 <code>event.target.closest()</code> 找到真正的目标，天然支持动态元素。</li>
+  <li>Pointer Events 统一鼠标 / 触摸 / 笔；配合 <code>setPointerCapture</code> 和 CSS <code>touch-action</code>。</li>
+  <li>键盘：用 <code>key</code> 判断字符、<code>code</code> 判断物理位置；处理 Enter 前先检查 <code>isComposing</code>。</li>
+  <li>继承 <code>EventTarget</code> 实现发布订阅；用 <code>once</code>、<code>passive</code>、<code>signal</code> 管理监听器的生命周期。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个下拉菜单：点击按钮打开，点击页面其他任何地方关闭（提示：在 <code>document</code> 上监听，用 <code>menu.contains(event.target)</code> 判断），按 Esc 也关闭。</li>
+    <li>给一个 10000 行的表格实现「点击行高亮」，分别用「每行一个监听器」和「事件委托」实现，在第 15 章的性能工具中比较两者的初始化耗时和内存。</li>
+    <li>改进本章的画板：支持两根手指同时画两条线（提示：用 <code>Map</code> 按 <code>pointerId</code> 记录每个触点的上一个位置）。</li>
+    <li>做一个聊天输入框：Enter 发送、Shift+Enter 换行，并在中文输入法下测试选词时不会误发送。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  // ---- 20.1 冒泡与捕获 ----
+  var out = document.getElementById('ev-out'), stop = document.getElementById('ev-stop'), log = [];
+  var names = { 'ev-outer': 'outer', 'ev-middle': 'middle', 'ev-inner': 'inner' };
+  var phaseName = { 1: '捕获', 2: '目标', 3: '冒泡' };
+  Object.keys(names).forEach(function (id) {
+    var el = document.getElementById(id);
+    function handler(e) {
+      log.push(names[id].padEnd(7, ' ') + phaseName[e.eventPhase] + '阶段   target=' + names[e.target.id] + '  currentTarget=' + names[e.currentTarget.id]);
+      el.classList.add('ev-flash'); setTimeout(function () { el.classList.remove('ev-flash'); }, 300 + log.length * 60);
+      if (id === 'ev-middle' && e.eventPhase === 3 && stop.checked) { e.stopPropagation(); log.push('— middle 调用了 stopPropagation()，outer 的冒泡监听器收不到 —'); }
+      out.textContent = log.join('\n');
+    }
+    el.addEventListener('click', handler, { capture: true });
+    el.addEventListener('click', handler);
+  });
+  document.getElementById('ev-outer').addEventListener('click', function () { setTimeout(function () { log = []; }, 0); }, true);
+
+  // ---- 20.3 事件委托 ----
+  var list = document.getElementById('todo-list'), input = document.getElementById('todo-input');
+  function addTodo() {
+    var t = input.value.trim(); if (!t) return;
+    var li = document.createElement('li');
+    var span = document.createElement('span'); span.textContent = t;
+    var b = document.createElement('button'); b.className = 'del'; b.type = 'button'; b.textContent = '删除';
+    li.append(span, b); list.append(li); input.value = '';
+  }
+  document.getElementById('todo-add').onclick = addTodo;
+  input.addEventListener('keydown', function (e) { if (e.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') addTodo(); });
+  list.addEventListener('click', function (e) {
+    var del = e.target.closest('.del');
+    if (del && list.contains(del)) { del.closest('li').remove(); return; }
+    var li = e.target.closest('li'); if (li) li.classList.toggle('done');
+  });
+
+  // ---- 20.4 画板 ----
+  var pad = document.getElementById('pad'), info = document.getElementById('pad-info'), ctx = pad.getContext('2d'), drawing = false;
+  function fit() {
+    var r = pad.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    pad.width = r.width * dpr; pad.height = r.height * dpr; ctx.scale(dpr, dpr);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--accent') || '#d95602';
+  }
+  fit(); window.addEventListener('resize', fit);
+  pad.addEventListener('pointerdown', function (e) {
+    drawing = true; pad.setPointerCapture(e.pointerId);
+    ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--accent');
+    ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY);
+  });
+  pad.addEventListener('pointermove', function (e) {
+    info.textContent = 'pointerType = ' + e.pointerType + '，pressure = ' + e.pressure.toFixed(2) + '，pointerId = ' + e.pointerId;
+    if (!drawing) return;
+    ctx.lineWidth = 1 + e.pressure * 8; ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke();
+  });
+  ['pointerup', 'pointercancel'].forEach(function (t) { pad.addEventListener(t, function () { drawing = false; }); });
+  document.getElementById('pad-clear').onclick = function () { ctx.clearRect(0, 0, pad.width, pad.height); };
+
+  // ---- 20.5 键盘 ----
+  var ki = document.getElementById('kbd-input'), ko = document.getElementById('kbd-out'), klog = [];
+  function kpush(s) { klog.unshift(s); ko.textContent = klog.slice(0, 10).join('\n'); }
+  ki.addEventListener('keydown', function (e) {
+    var mods = ['ctrlKey', 'metaKey', 'shiftKey', 'altKey'].filter(function (m) { return e[m]; }).map(function (m) { return m.replace('Key', ''); }).join('+');
+    kpush('keydown  key=' + JSON.stringify(e.key).padEnd(12, ' ') + ' code=' + e.code.padEnd(12, ' ') + (mods ? ' [' + mods + ']' : '') + '  isComposing=' + e.isComposing +
+      (e.key === 'Enter' ? (e.isComposing || e.keyCode === 229 ? '  → 输入法选词，不发送' : '  → 发送！') : ''));
+  });
+  ki.addEventListener('compositionstart', function () { kpush('compositionstart（开始组字）'); });
+  ki.addEventListener('compositionend', function (e) { kpush('compositionend   上屏：' + JSON.stringify(e.data)); });
+})();
+</script>
+</body>
+</html>

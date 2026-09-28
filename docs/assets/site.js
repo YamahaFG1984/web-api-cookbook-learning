@@ -23,7 +23,10 @@
     { n: 16, t: '控制台',                d: '把 console 用到极致：样式、表格、计时与分组' },
     { n: 17, t: 'CSS 相关 API',          d: '高亮、字体加载、视图过渡与样式查询', part: '第六部分 · 样式与媒体' },
     { n: 18, t: '媒体',                  d: '录屏、摄像头拍照与录像、媒体能力检测' },
-    { n: 19, t: '结语',                  d: '特性检测、polyfill 与 Web 平台的未来' }
+    { n: 19, t: '结语',                  d: '特性检测、polyfill 与 Web 平台的未来' },
+    { n: 20, t: '事件系统深入',          d: '冒泡与捕获、事件委托、Pointer 与键盘事件', part: '第七部分 · 补充篇' },
+    { n: 21, t: 'Web Worker 与主线程',   d: '事件循环、长任务、postMessage 与让出主线程' },
+    { n: 22, t: 'Service Worker 与 PWA', d: '离线缓存、缓存策略、更新流程与安装' }
   ];
 
   var cur = parseInt(document.body.dataset.chapter || '0', 10);

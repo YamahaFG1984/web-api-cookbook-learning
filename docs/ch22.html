@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 22 章 · Service Worker 与 PWA — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="22">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 22 章 · 补充篇</span>
+<h1>Service Worker 与 PWA</h1>
+<p class="lede">
+  到目前为止，我们做的所有网页都有一个共同的弱点：<strong>断网就打不开</strong>。原生 App 则不同，没有网络时至少能打开界面、显示缓存的内容。
+  Service Worker 让网页也拥有这种能力：它是一个运行在页面和网络之间的「代理」，可以拦截每一个请求，决定从缓存还是从网络取数据。
+  再加上一个描述应用信息的 Manifest 文件，网页就能像 App 一样被安装到桌面，这就是 <strong>PWA</strong>（Progressive Web App，渐进式 Web 应用）。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解 Service Worker 的角色、作用域与生命周期</li>
+    <li>用 Cache API 预缓存「应用外壳」（App Shell）</li>
+    <li>在 <code>fetch</code> 事件中实现缓存优先、网络优先、stale-while-revalidate 等策略</li>
+    <li>正确地发布新版本：清理旧缓存、提示用户更新</li>
+    <li>编写 Web App Manifest，让网页可以被安装</li>
+    <li>了解推送通知、后台同步等「App 化」能力，以及调试方法</li>
+  </ul>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 本章配有一个可以真正离线运行的演示应用</div>
+  <p>
+    <a href="demo/pwa/">打开离线演示应用 →</a>　它的 Service Worker 只控制 <code>demo/pwa/</code> 目录，不会影响教程的其他页面。
+    需要通过 HTTPS（例如部署到 GitHub Pages 后）或 <code>localhost</code> 访问。
+  </p>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">Service Worker 是什么</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 260" role="img" aria-label="Service Worker 位于页面与网络之间，拦截请求">
+  <rect class="bx-b" x="20" y="70" width="170" height="110" rx="12"/>
+  <text class="ttl on-b" x="105" y="96" text-anchor="middle">页面</text>
+  <text class="mono" x="105" y="122" text-anchor="middle" style="font-size:11px">fetch('/api/news')</text>
+  <text class="mono" x="105" y="142" text-anchor="middle" style="font-size:11px">&lt;img src="logo.png"&gt;</text>
+  <text class="sm" x="105" y="164" text-anchor="middle">页面本身的导航</text>
+
+  <path class="ln-b" d="M192 125 H266" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="229" y="117" text-anchor="middle">所有请求</text>
+
+  <rect class="bx-a" x="270" y="50" width="220" height="150" rx="14"/>
+  <text class="ttl on-a" x="380" y="76" text-anchor="middle">Service Worker</text>
+  <text class="sm" x="380" y="96" text-anchor="middle">独立线程，没有 DOM</text>
+  <text class="mono" x="380" y="124" text-anchor="middle" style="font-size:11px">fetch 事件 → event.respondWith(…)</text>
+  <text class="sm" x="380" y="150" text-anchor="middle">自己决定：查缓存？走网络？</text>
+  <text class="sm" x="380" y="168" text-anchor="middle">两者都失败时返回什么？</text>
+  <text class="sm" x="380" y="186" text-anchor="middle">页面关闭后也能被事件唤醒</text>
+
+  <path class="ln-g" d="M492 100 H566" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="570" y="70" width="170" height="56" rx="10"/>
+  <text class="ttl on-g" x="655" y="94" text-anchor="middle">Cache Storage</text>
+  <text class="sm" x="655" y="112" text-anchor="middle">Request → Response</text>
+  <path class="ln" d="M492 160 H566" marker-end="url(#ar)"/>
+  <rect class="bx" x="570" y="140" width="170" height="56" rx="10"/>
+  <text class="ttl" x="655" y="164" text-anchor="middle">网络</text>
+  <text class="sm" x="655" y="182" text-anchor="middle">服务器</text>
+
+  <text class="sm" x="380" y="232" text-anchor="middle">没有 Service Worker 时，请求直接走网络；有了它，每个请求都先经过它这一关</text>
+</svg>
+<figcaption>图 22-1　Service Worker：页面与网络之间的可编程代理</figcaption>
+</figure>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128268;</span><h4>离线可用</h4><p>缓存页面和资源，断网时照样打开，至少能显示一个友好的离线页。</p></div>
+  <div class="card"><span class="ic">&#9889;</span><h4>更快</h4><p>重复访问时静态资源直接从本地缓存返回，不必等待网络。</p></div>
+  <div class="card"><span class="ic">&#128276;</span><h4>后台能力</h4><p>推送通知、后台同步：页面没打开时也能被唤醒处理事件。</p></div>
+  <div class="card"><span class="ic">&#128241;</span><h4>可安装</h4><p>配合 Manifest，网页可以添加到桌面 / 主屏幕，以独立窗口运行。</p></div>
+</div>
+
+<p>
+  它是第 21 章介绍的三种 Worker 之一，所以同样<strong>没有 DOM</strong>、不能用 <code>localStorage</code>，只能用 IndexedDB、Cache API 等异步存储。
+  出于安全原因，它<strong>只能在 HTTPS（或 localhost）下注册</strong> —— 一个能拦截所有请求的脚本，绝不能被中间人篡改。<span class="bl wide">Baseline 广泛可用</span>
+</p>
+
+<h2 id="r22-1"><span class="rn">22.1</span>注册 Service Worker</h2>
+
+<p class="prob">你想为网站注册一个 Service Worker。</p>
+
+<div class="code" data-lang="js" data-file="app.js（页面中）">
+<script type="text/plain">
+if ('serviceWorker' in navigator) {
+  // 建议在页面加载完成后再注册，避免和首屏资源抢带宽
+  window.addEventListener('load', async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js');
+      console.log('注册成功，作用域：', registration.scope);
+    } catch (error) {
+      console.error('注册失败：', error);
+    }
+  });
+}
+</script>
+</div>
+
+<h3>作用域（scope）</h3>
+
+<p>一个 Service Worker 只能控制<strong>它所在目录及其子目录</strong>下的页面。这就是为什么 <code>sw.js</code> 通常放在网站根目录：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="Service Worker 的作用域由脚本所在路径决定">
+  <text class="mono" x="20" y="30">/sw.js</text>
+  <rect class="bx-g" x="160" y="14" width="580" height="26" rx="6"/>
+  <text class="sm on-g" x="172" y="32">scope = /　→ 控制整个网站：/index.html、/blog/a.html、/demo/pwa/ …</text>
+
+  <text class="mono" x="20" y="80">/demo/pwa/sw.js</text>
+  <rect class="bx-a" x="160" y="64" width="380" height="26" rx="6"/>
+  <text class="sm on-a" x="172" y="82">scope = /demo/pwa/　→ 只控制这个目录下的页面</text>
+  <rect class="bx-r" x="550" y="64" width="190" height="26" rx="6"/>
+  <text class="sm on-r" x="560" y="82">/index.html 不受它控制</text>
+
+  <text class="sm" x="20" y="126">「控制」的是页面（client）：被控制的页面发出的所有请求 —— 包括指向作用域之外、甚至其他域名的</text>
+  <text class="sm" x="20" y="144">图片和接口请求 —— 都会经过这个 Service Worker 的 fetch 事件。</text>
+  <text class="sm on-b" x="20" y="176">本章的演示应用就是这样做的：sw.js 放在 demo/pwa/ 下，所以它不会接管教程的其他页面</text>
+</svg>
+<figcaption>图 22-2　作用域决定「控制哪些页面」</figcaption>
+</figure>
+
+<h2 id="r22-2"><span class="rn">22.2</span>理解生命周期</h2>
+
+<p class="prob">你修改了 sw.js 并重新部署，可是用户打开页面看到的还是旧版本。</p>
+
+<p>这几乎是每个人第一次写 Service Worker 时都会遇到的困惑。原因在于它独特的生命周期：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="Service Worker 生命周期：安装、等待、激活、运行">
+  <rect class="bx" x="20" y="40" width="120" height="56" rx="10"/>
+  <text class="lbl" x="80" y="64" text-anchor="middle">register()</text>
+  <text class="sm" x="80" y="82" text-anchor="middle">下载 sw.js</text>
+  <path class="ln" d="M142 68 H176" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="180" y="40" width="130" height="56" rx="10"/>
+  <text class="lbl on-b" x="245" y="64" text-anchor="middle">installing</text>
+  <text class="mono" x="245" y="82" text-anchor="middle" style="font-size:11px">install 事件</text>
+  <path class="ln" d="M312 68 H346" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="350" y="40" width="130" height="56" rx="10"/>
+  <text class="lbl on-a" x="415" y="64" text-anchor="middle">waiting</text>
+  <text class="sm" x="415" y="82" text-anchor="middle">等旧版本退场</text>
+  <path class="ln" d="M482 68 H516" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="520" y="40" width="110" height="56" rx="10"/>
+  <text class="lbl on-g" x="575" y="64" text-anchor="middle">activating</text>
+  <text class="mono" x="575" y="82" text-anchor="middle" style="font-size:11px">activate 事件</text>
+  <path class="ln" d="M632 68 H656" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="660" y="40" width="80" height="56" rx="10"/>
+  <text class="lbl on-g" x="700" y="64" text-anchor="middle">activated</text>
+  <text class="sm" x="700" y="82" text-anchor="middle">处理 fetch</text>
+
+  <text class="sm on-b" x="245" y="120" text-anchor="middle">预缓存 App Shell</text>
+  <text class="sm on-a" x="415" y="120" text-anchor="middle">首次安装：直接跳过</text>
+  <text class="sm on-a" x="415" y="136" text-anchor="middle">更新时：一直等到所有</text>
+  <text class="sm on-a" x="415" y="152" text-anchor="middle">旧版本控制的标签页都关闭</text>
+  <text class="sm on-g" x="575" y="120" text-anchor="middle">清理旧缓存</text>
+
+  <rect class="bx-d" x="20" y="176" width="720" height="104" rx="10"/>
+  <text class="ttl" x="36" y="198">两个关键规则</text>
+  <text class="sm" x="36" y="218">① 首次访问时，页面在 Service Worker 注册之前就已加载，所以<tspan font-weight="700">这一次不受控制</tspan>；</text>
+  <text class="sm" x="36" y="234">　 刷新之后才被控制，或者在 activate 中调用 clients.claim() 立即接管。</text>
+  <text class="sm" x="36" y="254">② 更新时，新版本装好后停在 waiting：同一页面同一时刻只能由一个版本控制。只刷新不够（刷新时旧版本仍在控制），</text>
+  <text class="sm" x="36" y="270">　 要<tspan font-weight="700">关闭所有相关标签页</tspan>，或者由代码调用 skipWaiting()。</text>
+</svg>
+<figcaption>图 22-3　Service Worker 的生命周期，以及「为什么我的更新没生效」</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; 浏览器什么时候检查更新？</div>
+  <p>
+    每次导航到受控页面时（最多每 24 小时强制一次），浏览器会重新下载 <code>sw.js</code> 并<strong>逐字节比较</strong>。只要有一个字节不同，就视为新版本并开始安装。
+    所以发布新版本的常见做法，是修改文件里的版本号常量。检查 sw.js 更新时，浏览器默认会绕过 HTTP 缓存，但它 <code>importScripts</code> 引入的其他脚本仍受缓存影响。
+  </p>
+</div>
+
+<h2 id="r22-3"><span class="rn">22.3</span>预缓存应用外壳</h2>
+
+<p class="prob">你希望网站在第一次访问后，即使断网也能打开基本界面。</p>
+
+<p>
+  <strong>应用外壳</strong>（App Shell）指的是显示界面所需的最少文件：HTML 骨架、CSS、核心 JS、图标。在 <code>install</code> 事件中把它们存入缓存：
+</p>
+
+<div class="code" data-lang="js" data-file="demo/pwa/sw.js（节选）">
+<script type="text/plain">
+const VERSION = 'v1';
+const CACHE = `pwa-demo-${VERSION}`;
+
+const APP_SHELL = [
+  './',
+  './index.html',
+  './app.js',
+  './manifest.webmanifest',
+  './icon.svg',
+  './offline.html',
+  '../../assets/style.css'
+];
+
+self.addEventListener('install', event => {
+  // waitUntil：告诉浏览器「等这个 Promise 完成，安装才算结束」
+  event.waitUntil(
+    caches.open(CACHE).then(cache => cache.addAll(APP_SHELL))
+  );
+});
+</script>
+</div>
+
+<ul>
+  <li><code>event.waitUntil(promise)</code> 延长事件的生命周期。如果 Promise 被拒绝（比如某个文件 404），<strong>整个安装失败</strong>，新版本被丢弃，旧版本继续工作 —— 这保证了缓存要么完整、要么不用。</li>
+  <li>Service Worker 随时可能被浏览器挂起以节省资源，所以<strong>不要在全局变量里保存状态</strong>，需要持久化的数据放进 Cache API 或 IndexedDB。</li>
+</ul>
+
+<h3>Cache API 速查</h3>
+
+<p>Cache API 专门存储「请求 → 响应」对，在 Service Worker 和普通页面中都能使用：<span class="bl wide">Baseline 广泛可用</span></p>
+
+<div class="tw">
+<table>
+  <tr><th>方法</th><th>作用</th></tr>
+  <tr><td><code>caches.open(name)</code></td><td>打开（不存在则创建）一个命名缓存</td></tr>
+  <tr><td><code>cache.addAll(urls)</code></td><td>请求这些 URL 并全部存入（任一失败则全部失败）</td></tr>
+  <tr><td><code>cache.put(request, response)</code></td><td>存入一个你已经拿到的响应（注意 Response 只能读一次，存之前要 <code>clone()</code>）</td></tr>
+  <tr><td><code>cache.match(request)</code> / <code>caches.match(request)</code></td><td>在某个 / 所有缓存中查找，找不到返回 <code>undefined</code></td></tr>
+  <tr><td><code>cache.keys()</code> / <code>caches.keys()</code></td><td>列出缓存中的请求 / 所有缓存的名字</td></tr>
+  <tr><td><code>cache.delete(request)</code> / <code>caches.delete(name)</code></td><td>删除一个条目 / 整个缓存</td></tr>
+</table>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; Cache API 不会自动过期</div>
+  <p>
+    与浏览器的 HTTP 缓存不同，Cache Storage 中的内容<strong>永远不会自己过期或更新</strong>，完全由你的代码管理。
+    它和 IndexedDB 共享第 2 章提到的存储配额，写满了浏览器可能整体清除网站数据。所以要控制缓存的大小，并在新版本中清理旧缓存（22.5 节）。
+  </p>
+</div>
+
+<h2 id="r22-4"><span class="rn">22.4</span>拦截请求：缓存策略</h2>
+
+<p class="prob">不同的资源有不同的需求：图标很少变化，要最快；新闻数据要尽量新；HTML 在线时要最新、离线时也要能打开。</p>
+
+<p>所有请求都会触发 Service Worker 的 <code>fetch</code> 事件，调用 <code>event.respondWith(响应或 Promise)</code> 就能「代答」。常见的策略有：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="三种常用缓存策略的流程">
+  <text class="ttl on-g" x="20" y="24">缓存优先（Cache First）</text>
+  <rect class="bx" x="20" y="36" width="90" height="36" rx="6"/><text class="sm" x="65" y="58" text-anchor="middle">请求</text>
+  <path class="ln" d="M112 54 H146" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="150" y="36" width="100" height="36" rx="6"/><text class="sm on-g" x="200" y="58" text-anchor="middle">查缓存</text>
+  <path class="ln-g" d="M252 54 H286" marker-end="url(#ar-g)"/><text class="sm on-g" x="269" y="46" text-anchor="middle">命中</text>
+  <rect class="bx-g" x="290" y="36" width="90" height="36" rx="6"/><text class="sm on-g" x="335" y="58" text-anchor="middle">直接返回</text>
+  <path class="ln" d="M200 74 V96 H440 V74" marker-end="url(#ar)"/><text class="sm" x="320" y="92" text-anchor="middle">未命中</text>
+  <rect class="bx" x="400" y="36" width="130" height="36" rx="6"/><text class="sm" x="465" y="58" text-anchor="middle">网络 → 存入缓存</text>
+  <text class="sm" x="550" y="50">最快；适合带版本号 / 哈希的</text>
+  <text class="sm" x="550" y="66">静态资源、图标、字体</text>
+
+  <text class="ttl on-b" x="20" y="134">网络优先（Network First）</text>
+  <rect class="bx" x="20" y="146" width="90" height="36" rx="6"/><text class="sm" x="65" y="168" text-anchor="middle">请求</text>
+  <path class="ln" d="M112 164 H146" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="150" y="146" width="100" height="36" rx="6"/><text class="sm on-b" x="200" y="168" text-anchor="middle">走网络</text>
+  <path class="ln-b" d="M252 164 H286" marker-end="url(#ar-b)"/><text class="sm on-b" x="269" y="156" text-anchor="middle">成功</text>
+  <rect class="bx-b" x="290" y="146" width="100" height="36" rx="6"/><text class="sm on-b" x="340" y="168" text-anchor="middle">返回 + 更新缓存</text>
+  <path class="ln-r" d="M200 184 V206 H440 V184" marker-end="url(#ar-r)"/><text class="sm on-r" x="320" y="202" text-anchor="middle">失败（离线）</text>
+  <rect class="bx" x="400" y="146" width="130" height="36" rx="6"/><text class="sm" x="465" y="168" text-anchor="middle">缓存 → 离线页</text>
+  <text class="sm" x="550" y="160">总是尽量新；适合 HTML 页面、</text>
+  <text class="sm" x="550" y="176">必须实时的接口数据</text>
+
+  <text class="ttl on-a" x="20" y="244">先用缓存、后台更新（Stale-While-Revalidate）</text>
+  <rect class="bx" x="20" y="256" width="90" height="36" rx="6"/><text class="sm" x="65" y="278" text-anchor="middle">请求</text>
+  <path class="ln" d="M112 274 H146" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="150" y="256" width="100" height="36" rx="6"/><text class="sm on-a" x="200" y="278" text-anchor="middle">立即返回缓存</text>
+  <path class="ln-d" d="M200 294 V316 H320"/>
+  <rect class="bx-d" x="290" y="256" width="200" height="36" rx="6"/><text class="sm" x="390" y="278" text-anchor="middle">同时：网络 → 更新缓存</text>
+  <text class="sm" x="330" y="318">下次访问就是新的</text>
+  <text class="sm" x="550" y="270">又快又「最终一致」；适合头像、</text>
+  <text class="sm" x="550" y="286">不带版本号的 CSS/JS、新闻列表</text>
+</svg>
+<figcaption>图 22-4　三种最常用的缓存策略</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="demo/pwa/sw.js（节选）">
+<script type="text/plain">
+self.addEventListener('fetch', event => {
+  const { request } = event;
+  if (request.method !== 'GET') return;   // 不调用 respondWith = 交给浏览器正常处理
+
+  if (request.mode === 'navigate') {
+    // 页面导航：网络优先，离线时退回缓存，再退回离线页
+    event.respondWith(networkFirst(request));
+  } else {
+    // 其他资源：stale-while-revalidate
+    event.respondWith(staleWhileRevalidate(request, event));
+  }
+});
+
+async function networkFirst(request) {
+  const cache = await caches.open(CACHE);
+  try {
+    const response = await fetch(request);
+    if (response.ok) cache.put(request, response.clone());   // Response 只能读一次，存一份副本
+    return response;
+  } catch (error) {
+    return (await cache.match(request)) || (await cache.match('./offline.html'));
+  }
+}
+
+async function staleWhileRevalidate(request, event) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(request);
+  const update = fetch(request)
+    .then(response => {
+      if (response.ok) cache.put(request, response.clone());
+      return response;
+    })
+    .catch(() => cached);
+
+  if (cached) {
+    event.waitUntil(update);   // 已经返回了缓存，但要让后台更新完成，不被中途挂起
+    return cached;
+  }
+  return update;
+}
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>策略</th><th>速度</th><th>新鲜度</th><th>离线</th><th>适用</th></tr>
+  <tr><td>缓存优先</td><td>★★★</td><td>★（需要版本号来更新）</td><td>✓</td><td><code>app.3f9a2c.js</code> 这类带哈希的文件、字体</td></tr>
+  <tr><td>网络优先</td><td>★（取决于网络）</td><td>★★★</td><td>✓（退回缓存）</td><td>HTML、个人数据、订单状态</td></tr>
+  <tr><td>Stale-While-Revalidate</td><td>★★★</td><td>★★（晚一次）</td><td>✓</td><td>头像、不常变的接口、新闻列表</td></tr>
+  <tr><td>仅网络</td><td>—</td><td>★★★</td><td>✗</td><td>POST 请求、支付、统计上报</td></tr>
+  <tr><td>仅缓存</td><td>★★★</td><td>—</td><td>✓</td><td>install 时预缓存、永不变化的资源</td></tr>
+</table>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 最容易踩的坑：把 HTML 永久缓存了</div>
+  <p>
+    如果对 <code>index.html</code> 使用缓存优先，用户会永远看到第一次访问时的版本，发布多少次都没用，除非 Service Worker 本身更新。
+    HTML 请用网络优先；只有文件名带内容哈希、内容一变文件名就变的资源，才适合无限期的缓存优先。
+  </p>
+</div>
+
+<h2 id="r22-5"><span class="rn">22.5</span>发布新版本：清理与提示更新</h2>
+
+<p class="prob">发布了新版本的 sw.js，你想清理旧缓存，并友好地提示用户刷新以使用新版本。</p>
+
+<div class="code" data-lang="js" data-file="demo/pwa/sw.js（节选）">
+<script type="text/plain">
+// activate：新版本正式上岗时，删除旧版本的缓存
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys
+        .filter(key => key.startsWith('pwa-demo-') && key !== CACHE)
+        .map(key => caches.delete(key))
+    );
+    await self.clients.claim();   // 立即接管已打开的页面，不用等下次导航
+  })());
+});
+
+// 页面通知「用户同意更新」时，跳过等待
+self.addEventListener('message', event => {
+  if (event.data === 'SKIP_WAITING') self.skipWaiting();
+});
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="demo/pwa/app.js（节选）">
+<script type="text/plain">
+const registration = await navigator.serviceWorker.register('./sw.js');
+
+registration.addEventListener('updatefound', () => {
+  const newWorker = registration.installing;
+  newWorker.addEventListener('statechange', () => {
+    // 安装完成，并且页面已经被旧版本控制 → 这是一次「更新」
+    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+      showUpdateBanner(() => newWorker.postMessage('SKIP_WAITING'));
+    }
+  });
+});
+
+// 新版本接管后刷新页面（只在用户点了「更新」时刷新，避免意外丢失用户输入）
+let refreshing = false;
+navigator.serviceWorker.addEventListener('controllerchange', () => {
+  if (!refreshing && userClickedUpdate) {
+    refreshing = true;
+    location.reload();
+  }
+});
+</script>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="提示用户更新的流程">
+  <rect class="bx" x="20" y="60" width="130" height="56" rx="10"/><text class="lbl" x="85" y="84" text-anchor="middle">发现新 sw.js</text><text class="mono" x="85" y="102" text-anchor="middle" style="font-size:10.5px">updatefound</text>
+  <path class="ln" d="M152 88 H180" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="184" y="60" width="130" height="56" rx="10"/><text class="lbl on-a" x="249" y="84" text-anchor="middle">installed</text><text class="sm" x="249" y="102" text-anchor="middle">进入 waiting</text>
+  <path class="ln" d="M316 88 H344" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="348" y="60" width="130" height="56" rx="10"/><text class="lbl on-b" x="413" y="84" text-anchor="middle">「有新版本」</text><text class="sm" x="413" y="102" text-anchor="middle">用户点击更新</text>
+  <path class="ln" d="M480 88 H508" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="512" y="60" width="110" height="56" rx="10"/><text class="mono on-p" x="567" y="84" text-anchor="middle" style="font-size:11px">skipWaiting()</text><text class="sm" x="567" y="102" text-anchor="middle">立即激活</text>
+  <path class="ln" d="M624 88 H652" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="656" y="60" width="84" height="56" rx="10"/><text class="mono on-g" x="698" y="84" text-anchor="middle" style="font-size:10.5px">controller</text><text class="mono on-g" x="698" y="100" text-anchor="middle" style="font-size:10.5px">change</text>
+  <text class="sm" x="698" y="136" text-anchor="middle">→ reload()</text>
+  <text class="sm" x="380" y="30" text-anchor="middle">让用户决定何时切换版本，而不是在他填表单时突然刷新页面</text>
+  <text class="sm" x="380" y="166" text-anchor="middle">如果你的应用可以接受「随时切换」，也可以在 install 中直接 self.skipWaiting()，省去提示</text>
+</svg>
+<figcaption>图 22-5　「有新版本，点击更新」的完整流程</figcaption>
+</figure>
+
+<h2 id="r22-6"><span class="rn">22.6</span>Web App Manifest 与安装</h2>
+
+<p class="prob">你希望用户能把网站「安装」到桌面或手机主屏幕，像 App 一样用独立窗口打开。</p>
+
+<p>Manifest 是一个 JSON 文件，描述应用的名称、图标、主题色和打开方式：</p>
+
+<div class="code" data-lang="json" data-file="demo/pwa/manifest.webmanifest">
+<script type="text/plain">
+{
+  "name": "Web API 实战 · 离线演示",
+  "short_name": "离线演示",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbfaf8",
+  "theme_color": "#d95602",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
+</script>
+</div>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#d95602">
+</script>
+</div>
+
+<dl class="terms">
+  <dt>name / short_name</dt><dd>完整名称，以及主屏幕图标下显示的短名称</dd>
+  <dt>start_url</dt><dd>从桌面图标打开时加载的地址</dd>
+  <dt>display</dt><dd><code>standalone</code>：独立窗口，没有地址栏；<code>fullscreen</code>：全屏；<code>browser</code>：普通标签页</dd>
+  <dt>icons</dt><dd>各种尺寸的图标。实际项目中通常至少提供 192×192 和 512×512 的 PNG，以及用于 Android 自适应图标的 <code>"purpose": "maskable"</code> 版本</dd>
+  <dt>theme_color</dt><dd>标题栏、状态栏的颜色</dd>
+</dl>
+
+<div class="tw">
+<table>
+  <tr><th>浏览器</th><th>安装方式</th></tr>
+  <tr><td>Chrome / Edge（桌面与 Android）</td><td>地址栏的安装图标或菜单；页面可监听 <code>beforeinstallprompt</code>，用自己的按钮触发安装提示</td></tr>
+  <tr><td>Safari（iOS / iPadOS）</td><td>分享菜单 →「添加到主屏幕」</td></tr>
+  <tr><td>Safari（macOS）</td><td>文件菜单 →「添加到程序坞」</td></tr>
+  <tr><td>Firefox</td><td>Android 版支持添加到主屏幕；桌面版基本不支持安装</td></tr>
+</table>
+</div>
+
+<div class="code" data-lang="js" data-file="自定义安装按钮（Chromium）">
+<script type="text/plain">
+let deferredPrompt;
+
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();          // 先不弹浏览器自带的提示
+  deferredPrompt = event;
+  installButton.hidden = false;    // 显示我们自己的「安装」按钮
+});
+
+installButton.addEventListener('click', async () => {
+  deferredPrompt.prompt();
+  const { outcome } = await deferredPrompt.userChoice;   // 'accepted' 或 'dismissed'
+  deferredPrompt = null;
+  installButton.hidden = true;
+});
+
+// 判断当前是否以「已安装应用」的形式运行（第 17 章的 matchMedia）
+const isInstalled = matchMedia('(display-mode: standalone)').matches;
+</script>
+</div>
+
+<h2 id="r22-7"><span class="rn">22.7</span>推送通知与后台能力</h2>
+
+<p class="prob">你希望在用户没有打开网站时，也能给他发送通知（比如「你的订单已发货」）。</p>
+
+<p>
+  第 13 章的 Notification 只能在页面打开时由页面创建。<strong>推送</strong>则由服务器发起，经过浏览器厂商的推送服务，唤醒你的 Service Worker 显示通知：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="Web Push 推送通知的完整链路">
+  <rect class="bx-b" x="20" y="30" width="150" height="70" rx="10"/>
+  <text class="lbl on-b" x="95" y="56" text-anchor="middle">① 页面</text>
+  <text class="mono" x="95" y="76" text-anchor="middle" style="font-size:10.5px">pushManager</text>
+  <text class="mono" x="95" y="92" text-anchor="middle" style="font-size:10.5px">.subscribe()</text>
+  <path class="ln-b" d="M172 64 H286" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="229" y="56" text-anchor="middle">订阅信息</text>
+  <rect class="bx" x="290" y="30" width="170" height="70" rx="10"/>
+  <text class="lbl" x="375" y="56" text-anchor="middle">② 你的服务器</text>
+  <text class="sm" x="375" y="76" text-anchor="middle">保存订阅（endpoint）</text>
+  <text class="sm" x="375" y="92" text-anchor="middle">有事时用 VAPID 密钥签名</text>
+  <path class="ln" d="M462 64 H576" marker-end="url(#ar)"/>
+  <text class="sm" x="519" y="56" text-anchor="middle">加密消息</text>
+  <rect class="bx-p" x="580" y="30" width="160" height="70" rx="10"/>
+  <text class="lbl on-p" x="660" y="56" text-anchor="middle">③ 推送服务</text>
+  <text class="sm" x="660" y="76" text-anchor="middle">由浏览器厂商运营</text>
+  <text class="sm" x="660" y="92" text-anchor="middle">（FCM / Mozilla / Apple）</text>
+  <path class="ln-p" d="M660 102 V150 H472" marker-end="url(#ar-p)"/>
+  <rect class="bx-a" x="290" y="130" width="180" height="76" rx="10"/>
+  <text class="lbl on-a" x="380" y="154" text-anchor="middle">④ Service Worker 被唤醒</text>
+  <text class="mono" x="380" y="174" text-anchor="middle" style="font-size:10.5px">push 事件</text>
+  <text class="mono" x="380" y="192" text-anchor="middle" style="font-size:10.5px">showNotification()</text>
+  <path class="ln-a" d="M288 168 H176" marker-end="url(#ar-a)"/>
+  <rect class="bx-g" x="20" y="140" width="152" height="56" rx="10"/>
+  <text class="lbl on-g" x="96" y="164" text-anchor="middle">⑤ 系统通知</text>
+  <text class="sm" x="96" y="182" text-anchor="middle">即使网页没打开</text>
+</svg>
+<figcaption>图 22-6　Web Push：服务器 → 推送服务 → Service Worker → 通知</figcaption>
+</figure>
+
+<div class="code" data-lang="js" data-file="sw.js：接收推送">
+<script type="text/plain">
+self.addEventListener('push', event => {
+  const data = event.data?.json() ?? { title: '新消息' };
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: '/icon-192.png',
+      data: { url: data.url }
+    })
+  );
+});
+
+// 用户点击通知：打开（或聚焦）对应页面
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(clients.openWindow(event.notification.data.url));
+});
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>能力</th><th>作用</th><th>支持</th></tr>
+  <tr><td>Push API</td><td>服务器推送，唤醒 Service Worker</td><td><span class="bl newly">Baseline 2023</span> iOS 上仅限已添加到主屏幕的应用</td></tr>
+  <tr><td>Background Sync</td><td>离线时提交的表单，等网络恢复后由 Service Worker 自动重发</td><td><span class="bl limited">仅 Chromium</span></td></tr>
+  <tr><td>Navigation Preload</td><td>Service Worker 启动的同时并行发出导航请求，减少延迟</td><td><span class="bl wide">广泛可用</span></td></tr>
+</table>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 推送通知要克制</div>
+  <p>
+    推送权限的请求规则与第 13 章相同：必须由用户操作触发，而且大多数用户会拒绝「一打开网页就要求推送权限」的网站。
+    Chrome 等浏览器还会对通知骚扰严重的网站自动静默权限请求。只在用户明确需要时（如「订单发货时提醒我」）再请求。
+  </p>
+</div>
+
+<h2 id="debug">调试 Service Worker</h2>
+
+<ul>
+  <li><strong>开发者工具 → Application（应用）→ Service Workers</strong>：查看状态，手动 Update、Unregister，勾选 <strong>Update on reload</strong>（开发时每次刷新都安装新版本）。</li>
+  <li><strong>Application → Cache Storage</strong>：查看、删除缓存条目。</li>
+  <li><strong>Application → Storage → Clear site data</strong>：一键清空 Service Worker、缓存、IndexedDB 等所有数据，回到「首次访问」状态。</li>
+  <li><strong>Network 面板</strong>：来自 Service Worker 的响应会标注「(ServiceWorker)」；勾选 Offline 模拟断网。</li>
+  <li>地址栏输入 <code>chrome://serviceworker-internals</code> 可以查看浏览器中所有的 Service Worker。</li>
+</ul>
+
+<div class="box tip">
+  <div class="t">&#128161; 生产环境：考虑 Workbox</div>
+  <p>
+    手写缓存策略适合学习和小项目。大型项目中，Google 维护的 <a href="https://developer.chrome.com/docs/workbox">Workbox</a>
+    提供了现成的策略、缓存过期、预缓存清单生成（与构建工具集成，自动带上文件哈希）等功能；Vite 用户可以使用 <code>vite-plugin-pwa</code>。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：打开离线演示应用</div>
+  <div class="b">
+    <p style="margin-top:0">
+      演示应用实现了本章的全部内容：预缓存 App Shell、网络优先的导航 + 离线后备页、stale-while-revalidate 的静态资源、版本更新提示和安装按钮。
+    </p>
+    <div class="row"><a href="demo/pwa/" style="font-weight:600">→ 打开 demo/pwa/</a><span class="hint" id="sw-support"></span></div>
+  </div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>Service Worker 是位于页面与网络之间的可编程代理，只能在 HTTPS / localhost 下注册，控制范围由脚本所在目录（scope）决定。</li>
+  <li>生命周期：install（预缓存）→ waiting（等待旧版本退场）→ activate（清理旧缓存）→ 处理 fetch；首次访问的页面不受控制。</li>
+  <li>Cache API 存储「请求 → 响应」，不会自动过期，需要自己管理版本和清理。</li>
+  <li>按资源选择策略：HTML 网络优先，带哈希的静态资源缓存优先，其余 stale-while-revalidate；离线时返回后备页。</li>
+  <li>发布新版本：修改 sw.js（版本号）→ 提示用户 → <code>skipWaiting</code> → <code>controllerchange</code> 后刷新。</li>
+  <li>Manifest + Service Worker + HTTPS = 可安装的 PWA；推送通知通过 Push API 在页面关闭时也能送达。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>部署本教程后打开 <code>demo/pwa/</code>，按页面上的步骤完成一次离线访问；然后把 <code>sw.js</code> 中的 <code>VERSION</code> 改为 <code>'v2'</code> 重新部署，观察「有新版本」提示和旧缓存被删除的过程。</li>
+    <li>给你在第 5 章做的待办应用加上 Service Worker，让它完全离线可用（数据本来就存在 IndexedDB 中）。</li>
+    <li>给 22.4 节的缓存优先策略加上「最多缓存 50 张图片」的限制：超出时删除最早的条目（提示：<code>cache.keys()</code> 按插入顺序返回）。</li>
+    <li>实现一个「离线也能提交」的留言板：离线时把留言存进 IndexedDB，<code>online</code> 事件触发时再统一提交（这就是 Background Sync 的手动版）。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var el = document.getElementById('sw-support');
+  el.textContent = !('serviceWorker' in navigator)
+    ? '（当前浏览器 / 环境不支持 Service Worker）'
+    : (window.isSecureContext ? '（当前环境支持 Service Worker ✓）' : '（需要 HTTPS 或 localhost 才能注册）');
+})();
+</script>
+</body>
+</html>

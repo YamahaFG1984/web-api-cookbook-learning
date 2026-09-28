@@ -1,0 +1,14 @@
+{
+  "name": "Web API 实战 · 离线演示",
+  "short_name": "离线演示",
+  "description": "第 22 章 Service Worker 与 PWA 的演示应用",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbfaf8",
+  "theme_color": "#d95602",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
