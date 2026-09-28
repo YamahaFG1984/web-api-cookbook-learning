@@ -28,7 +28,10 @@
     { n: 21, t: 'Web Worker 与主线程',   d: '事件循环、长任务、postMessage 与让出主线程' },
     { n: 22, t: 'Service Worker 与 PWA', d: '离线缓存、缓存策略、更新流程与安装' },
     { n: 23, t: 'Web Crypto 与 Passkeys', d: '随机数、哈希、加密、签名与无密码登录' },
-    { n: 24, t: '前端安全',              d: 'XSS 防护、Sanitizer、CSP 与 Trusted Types' }
+    { n: 24, t: '前端安全',              d: 'XSS 防护、Sanitizer、CSP 与 Trusted Types' },
+    { n: 25, t: 'Canvas 2D 绘图',        d: '路径、变换、像素处理、动画与 OffscreenCanvas' },
+    { n: 26, t: 'Web Audio API',         d: '音频图、合成器、精确调度与可视化' },
+    { n: 27, t: 'WebRTC 点对点通信',     d: '信令、SDP、ICE、数据通道与视频通话' }
   ];
 
   var cur = parseInt(document.body.dataset.chapter || '0', 10);

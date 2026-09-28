@@ -333,6 +333,8 @@ figcaption {
 .dgm .mono  { font-family: var(--mono); font-size: 12px; }
 /* 分组上声明的等宽字体 / 字号传递给组内文字 */
 .dgm g.mono > text { font-family: var(--mono); font-size: inherit; }
+/* 等宽文字保留缩进空格（图中常用来排版代码） */
+.dgm .mono, .dgm g.mono > text, .dgm .mono tspan { white-space: pre; }
 .dgm .ttl   { font-weight: 700; font-size: 13.5px; }
 .dgm .on-a  { fill: var(--accent-2); }
 .dgm .on-b  { fill: var(--blue); }

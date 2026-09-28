@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 27 章 · WebRTC 点对点通信 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .peers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  @media (max-width: 600px) { .peers { grid-template-columns: 1fr; } }
+  .peer { border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
+  .peer h4 { margin: 0 0 6px; font-size: 14px; }
+  .peer video { width: 100%; aspect-ratio: 4 / 3; background: #111; border-radius: 6px; display: block; object-fit: cover; }
+  .chat { height: 110px; overflow: auto; font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 6px 0; }
+  .chat .me { color: var(--accent-2); } .chat .them { color: var(--blue); } .chat .sys { color: var(--fg-faint); font-size: 12px; }
+</style>
+</head>
+<body data-chapter="27">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 27 章 · 补充篇</span>
+<h1>WebRTC 点对点通信</h1>
+<p class="lede">
+  第 4 章的 WebSocket 让浏览器和<strong>服务器</strong>实时通信；第 18 章拿到了摄像头的画面。把两者结合起来，就是视频通话吗？
+  可以，但所有音视频都要经过你的服务器中转，延迟高、带宽贵。<strong>WebRTC</strong>（Web Real-Time Communication）让两个浏览器<strong>直接</strong>连接，
+  音视频和数据点对点传输，延迟低到可以实时对话。视频会议、在线协作白板、P2P 文件传输、云游戏，都建立在它之上。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解点对点连接为什么需要「信令」，以及 SDP offer / answer 的交换过程</li>
+    <li>理解 ICE、STUN、TURN 如何穿越 NAT 和防火墙</li>
+    <li>用 <code>RTCPeerConnection</code> 建立连接，用数据通道收发任意数据</li>
+    <li>在连接中传输摄像头的音视频</li>
+    <li>了解连接状态监控、网络拓扑（Mesh / SFU）和安全隐私问题</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">为什么需要点对点</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="经服务器中转与点对点直连的对比">
+  <text class="ttl on-r" x="195" y="24" text-anchor="middle">经服务器中转（WebSocket 方式）</text>
+  <rect class="bx-b" x="20" y="130" width="100" height="44" rx="8"/><text class="lbl on-b" x="70" y="157" text-anchor="middle">🙋 Alice</text>
+  <rect class="bx" x="145" y="44" width="100" height="44" rx="8"/><text class="lbl" x="195" y="71" text-anchor="middle">服务器</text>
+  <rect class="bx-g" x="270" y="130" width="100" height="44" rx="8"/><text class="lbl on-g" x="320" y="157" text-anchor="middle">🙋‍♂️ Bob</text>
+  <path class="ln-r" d="M92 128 L170 92" marker-end="url(#ar-r)"/>
+  <path class="ln-r" d="M222 92 L300 128" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="195" y="200" text-anchor="middle">每一帧画面都绕道服务器：多一段延迟，</text>
+  <text class="sm on-r" x="195" y="216" text-anchor="middle">服务器要承担所有人的音视频带宽</text>
+
+  <text class="ttl on-g" x="565" y="24" text-anchor="middle">WebRTC 点对点</text>
+  <rect class="bx-b" x="400" y="130" width="100" height="44" rx="8"/><text class="lbl on-b" x="450" y="157" text-anchor="middle">🙋 Alice</text>
+  <rect class="bx-d" x="515" y="44" width="100" height="44" rx="8"/><text class="lbl" x="565" y="64" text-anchor="middle">信令服务器</text><text class="sm" x="565" y="80" text-anchor="middle">只负责「介绍」</text>
+  <rect class="bx-g" x="630" y="130" width="100" height="44" rx="8"/><text class="lbl on-g" x="680" y="157" text-anchor="middle">🙋‍♂️ Bob</text>
+  <path class="ln-d" d="M470 128 L540 92"/><path class="ln-d" d="M590 92 L660 128"/>
+  <path class="ln-g" d="M502 152 H626" marker-end="url(#ar-g)" style="stroke-width:3"/>
+  <path class="ln-g" d="M626 160 H502" marker-end="url(#ar-g)" style="stroke-width:3"/>
+  <text class="sm on-g" x="565" y="200" text-anchor="middle">连接建立后，音视频和数据直接在两个浏览器间传输，</text>
+  <text class="sm on-g" x="565" y="216" text-anchor="middle">全程强制加密（DTLS / SRTP）</text>
+</svg>
+<figcaption>图 27-1　WebRTC 仍然需要服务器「牵线」，但真正的数据不经过它</figcaption>
+</figure>
+
+<p>WebRTC 由三组 API 组成：</p>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#127909;</span><h4>getUserMedia</h4><p>获取摄像头和麦克风（第 18 章已经学过）。</p></div>
+  <div class="card"><span class="ic">&#128279;</span><h4>RTCPeerConnection</h4><p>两个浏览器之间的连接：协商、穿越网络、加密、传输音视频，并根据网络状况自动调整码率。</p></div>
+  <div class="card"><span class="ic">&#128232;</span><h4>RTCDataChannel</h4><p>在同一个连接上收发任意数据（文字、文件、游戏状态），可以选择可靠或低延迟模式。</p></div>
+</div>
+
+<h2 id="r27-1"><span class="rn">27.1</span>信令：交换 offer 与 answer</h2>
+
+<p class="prob">两个浏览器互相不知道对方在哪里、支持什么格式，怎么开始建立连接？</p>
+
+<p>
+  在直连之前，双方需要交换一些「自我介绍」：我支持哪些编解码器、我的加密指纹是什么、我可能在哪些网络地址上被找到。
+  这个交换过程叫<strong>信令</strong>（signaling）。<strong>WebRTC 规范故意没有规定信令怎么传</strong> —— 你可以用 WebSocket、HTTP 轮询、
+  甚至把文字复制粘贴给对方。本章的跨标签页演示，就用第 2 章的 <code>BroadcastChannel</code> 当作信令通道。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="offer / answer 与 ICE 候选的交换时序">
+  <rect class="bx-b" x="20" y="14" width="170" height="36" rx="8"/><text class="lbl on-b" x="105" y="37" text-anchor="middle">Alice（发起方）</text>
+  <rect class="bx-d" x="295" y="14" width="170" height="36" rx="8"/><text class="lbl" x="380" y="37" text-anchor="middle">信令通道</text>
+  <rect class="bx-g" x="570" y="14" width="170" height="36" rx="8"/><text class="lbl on-g" x="655" y="37" text-anchor="middle">Bob（应答方）</text>
+  <path class="ln-d" d="M105 52 V320 M380 52 V320 M655 52 V320"/>
+
+  <text class="mono on-b" x="112" y="74" style="font-size:10.5px">createDataChannel / addTrack</text>
+  <text class="mono on-b" x="112" y="92" style="font-size:10.5px">setLocalDescription()</text>
+  <text class="sm" x="112" y="108">→ 生成 offer（SDP）</text>
+  <path class="ln-b" d="M105 122 H648" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="380" y="116" text-anchor="middle">offer</text>
+  <text class="mono on-g" x="648" y="144" text-anchor="end" style="font-size:10.5px">setRemoteDescription(offer)</text>
+  <text class="mono on-g" x="648" y="162" text-anchor="end" style="font-size:10.5px">setLocalDescription()</text>
+  <text class="sm" x="648" y="178" text-anchor="end">→ 自动生成 answer</text>
+  <path class="ln-g" d="M655 192 H112" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="380" y="186" text-anchor="middle">answer</text>
+  <text class="mono on-b" x="112" y="214" style="font-size:10.5px">setRemoteDescription(answer)</text>
+
+  <path class="ln-a" d="M105 238 H648" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M655 256 H112" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="380" y="232" text-anchor="middle">ICE 候选（可能有很多条，随时陆续产生）</text>
+  <text class="sm on-a" x="380" y="274" text-anchor="middle">icecandidate 事件 → 发给对方 → addIceCandidate()</text>
+
+  <rect class="bx-g" x="112" y="290" width="536" height="26" rx="6"/>
+  <text class="sm on-g" x="380" y="308" text-anchor="middle">找到一条可用的网络路径 → connectionState 变为 'connected' → 数据直接传输</text>
+</svg>
+<figcaption>图 27-2　信令流程：一次 offer / answer，加上若干 ICE 候选</figcaption>
+</figure>
+
+<p><strong>SDP</strong>（Session Description Protocol）是一段文本格式的「会话描述」，大致包含：</p>
+
+<div class="code" data-lang="text" data-file="offer.sdp（节选）">
+<pre>
+v=0
+o=- 4611731400430051336 2 IN IP4 127.0.0.1
+a=group:BUNDLE 0
+m=application 9 UDP/DTLS/SCTP webrtc-datachannel     ← 一个数据通道
+a=ice-ufrag:x1Qm                                     ← ICE 连接用的凭据
+a=ice-pwd:p1b2w8nFJxK…
+a=fingerprint:sha-256 7B:2E:91:…                     ← DTLS 证书指纹，用于加密握手时验明正身
+a=setup:actpass
+</pre>
+</div>
+
+<p>你几乎不需要手动阅读或修改 SDP，把它当作一个需要原样转交给对方的「信封」即可。</p>
+
+<h2 id="r27-2"><span class="rn">27.2</span>穿越网络：ICE、STUN 与 TURN</h2>
+
+<p class="prob">两台电脑都在各自的路由器后面，用的是 <code>192.168.x.x</code> 这样的内网地址，它们怎么可能直接连上？</p>
+
+<p>
+  这就是 <strong>ICE</strong>（Interactive Connectivity Establishment）要解决的问题。浏览器会收集所有「可能联系到我」的地址，称为<strong>候选</strong>（candidate），
+  交换给对方后，双方逐一尝试，找到能通的那一条：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="三类 ICE 候选：host、srflx、relay">
+  <rect class="bx-b" x="20" y="100" width="130" height="90" rx="10"/>
+  <text class="ttl on-b" x="85" y="124" text-anchor="middle">Alice 的浏览器</text>
+  <text class="sm" x="85" y="146" text-anchor="middle">内网 192.168.1.5</text>
+  <rect class="bx" x="180" y="110" width="100" height="70" rx="10"/>
+  <text class="lbl" x="230" y="138" text-anchor="middle">路由器 / NAT</text>
+  <text class="sm" x="230" y="158" text-anchor="middle">公网 203.0.113.7</text>
+  <path class="ln" d="M152 145 H176"/>
+
+  <rect class="bx-p" x="330" y="20" width="140" height="56" rx="10"/>
+  <text class="lbl on-p" x="400" y="44" text-anchor="middle">STUN 服务器</text>
+  <text class="sm" x="400" y="62" text-anchor="middle">「你的公网地址是…」</text>
+  <path class="ln-p" d="M282 128 L326 70" marker-end="url(#ar-p)"/>
+
+  <rect class="bx-r" x="330" y="222" width="140" height="56" rx="10"/>
+  <text class="lbl on-r" x="400" y="246" text-anchor="middle">TURN 服务器</text>
+  <text class="sm" x="400" y="264" text-anchor="middle">实在连不通时中转</text>
+  <path class="ln-r" d="M282 166 L326 234" marker-end="url(#ar-r)"/>
+  <path class="ln-r" d="M472 250 L606 180" marker-end="url(#ar-r)"/>
+
+  <rect class="bx-g" x="610" y="100" width="130" height="90" rx="10"/>
+  <text class="ttl on-g" x="675" y="124" text-anchor="middle">Bob 的浏览器</text>
+  <text class="sm" x="675" y="146" text-anchor="middle">在另一个网络里</text>
+  <path class="ln-g" d="M282 145 H606" marker-end="url(#ar-g)" style="stroke-dasharray:6 4"/>
+  <text class="sm on-g" x="450" y="138" text-anchor="middle">打洞成功时：直连</text>
+
+  <g>
+    <text class="mono on-b" x="20" y="216" style="font-size:11px">host</text><text class="sm" x="64" y="216">本机地址（同一局域网内可直连）</text>
+    <text class="mono on-p" x="20" y="236" style="font-size:11px">srflx</text><text class="sm" x="64" y="236">经 STUN 发现的公网地址</text>
+    <text class="mono on-r" x="20" y="256" style="font-size:11px">relay</text><text class="sm" x="64" y="256">TURN 中转地址（总能通，</text>
+    <text class="sm" x="64" y="272">但流量都经过服务器）</text>
+  </g>
+</svg>
+<figcaption>图 27-3　ICE 按从近到远的顺序尝试：本机地址 → 公网地址（STUN）→ 中转（TURN）</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const pc = new RTCPeerConnection({
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },          // 公共 STUN：只回答「你的公网地址是什么」，几乎不耗流量
+    {
+      urls: 'turn:turn.example.com:3478',              // 自己部署的 TURN（如 coturn），需要账号密码
+      username: 'user',
+      credential: 'secret'
+    }
+  ]
+});
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 生产环境必须有 TURN</div>
+  <p>
+    公司网络、对称型 NAT、某些移动网络下，直连会失败，这时只有 TURN 中转才能通。只配置 STUN 的应用，总会有一部分用户「怎么都连不上」。
+    TURN 服务器要转发全部音视频流量，带宽成本不低，通常用 coturn 自建，或使用云服务商的托管方案。
+  </p>
+</div>
+
+<h2 id="r27-3"><span class="rn">27.3</span>建立连接并收发数据</h2>
+
+<p class="prob">你想在两个浏览器之间建立一条直接的数据通道，用来聊天或传文件。</p>
+
+<p>以下代码假设有一个 <code>signaling</code> 对象负责把消息送到对方（WebSocket、BroadcastChannel 均可）：</p>
+
+<div class="code" data-lang="js" data-file="发起方（Alice）">
+<script type="text/plain">
+const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+// 1. 创建数据通道（必须在生成 offer 之前，这样 offer 里才会包含它）
+const channel = pc.createDataChannel('chat');
+channel.addEventListener('open', () => channel.send('你好，Bob！'));
+channel.addEventListener('message', e => console.log('Bob 说：', e.data));
+
+// 2. 发现的每个 ICE 候选都通过信令发给对方
+pc.addEventListener('icecandidate', ({ candidate }) => {
+  if (candidate) signaling.send({ type: 'candidate', candidate });
+});
+
+// 3. 生成并发送 offer
+await pc.setLocalDescription();                        // 不传参数：自动创建 offer
+signaling.send({ type: 'offer', sdp: pc.localDescription });
+
+// 4. 收到 answer / 候选
+signaling.onmessage = async msg => {
+  if (msg.type === 'answer') await pc.setRemoteDescription(msg.sdp);
+  if (msg.type === 'candidate') await pc.addIceCandidate(msg.candidate);
+};
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="应答方（Bob）">
+<script type="text/plain">
+const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+// 对方创建的数据通道，会通过 datachannel 事件交给我们
+pc.addEventListener('datachannel', ({ channel }) => {
+  channel.addEventListener('message', e => {
+    console.log('Alice 说：', e.data);
+    channel.send('你好，Alice！');
+  });
+});
+
+pc.addEventListener('icecandidate', ({ candidate }) => {
+  if (candidate) signaling.send({ type: 'candidate', candidate });
+});
+
+signaling.onmessage = async msg => {
+  if (msg.type === 'offer') {
+    await pc.setRemoteDescription(msg.sdp);
+    await pc.setLocalDescription();                    // 自动创建 answer
+    signaling.send({ type: 'answer', sdp: pc.localDescription });
+  }
+  if (msg.type === 'candidate') await pc.addIceCandidate(msg.candidate);
+};
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 数据通道的两种模式</div>
+  <p>
+    默认的数据通道像 TCP：<strong>可靠、有序</strong>，适合聊天和文件。对于游戏中的位置同步，旧数据迟到了也没有意义，
+    可以改为 <code>createDataChannel('game', { ordered: false, maxRetransmits: 0 })</code>：丢了就丢了，像 UDP 一样低延迟。
+    发送大文件时要分块发送，并参考 <code>channel.bufferedAmount</code> 控制速度，避免缓冲区爆满。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试 ①：同一个页面里的两个连接（观察完整的信令过程）</div>
+  <div class="b">
+    <div class="row">
+      <button id="lb-connect">建立连接</button>
+      <button id="lb-cam" disabled>📷 Alice 共享摄像头</button>
+      <button id="lb-close" disabled>断开</button>
+      <span class="hint" id="lb-state"></span>
+    </div>
+    <div class="peers">
+      <div class="peer"><h4>🙋 Alice（发起方）</h4>
+        <div class="chat" id="lb-chat-a"></div>
+        <div class="row"><input id="lb-in-a" placeholder="Alice 说…" style="flex:1"><button id="lb-send-a" disabled>发送</button></div>
+      </div>
+      <div class="peer"><h4>🙋‍♂️ Bob（应答方）</h4>
+        <video id="lb-video" autoplay playsinline muted></video>
+        <div class="chat" id="lb-chat-b"></div>
+        <div class="row"><input id="lb-in-b" placeholder="Bob 说…" style="flex:1"><button id="lb-send-b" disabled>发送</button></div>
+      </div>
+    </div>
+    <div class="out" id="lb-log" style="min-height:0;max-height:200px">信令日志会显示在这里</div>
+  </div>
+</div>
+
+<h2 id="r27-4"><span class="rn">27.4</span>传输音视频</h2>
+
+<p class="prob">做一个一对一的视频通话。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 发送方：把摄像头的每一条轨道加入连接（第 18 章的 getUserMedia）
+const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+localVideo.srcObject = stream;                           // 自己的画面（记得 muted，避免回授）
+for (const track of stream.getTracks()) {
+  pc.addTrack(track, stream);
+}
+
+// 接收方：对方的轨道到达时，显示出来
+pc.addEventListener('track', ({ streams: [remoteStream] }) => {
+  remoteVideo.srcObject = remoteStream;
+});
+
+// 切换成屏幕共享：替换视频轨道，不需要重新协商
+const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
+const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+await sender.replaceTrack(screen.getVideoTracks()[0]);
+
+// 静音 / 关闭摄像头：禁用轨道即可（对方会收到黑屏 / 静音）
+stream.getAudioTracks()[0].enabled = false;
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 通话中途加轨道要「重新协商」</div>
+  <p>
+    连接建立后再 <code>addTrack</code>（比如通话中才打开摄像头），会触发 <code>negotiationneeded</code> 事件，需要再交换一次 offer / answer。
+    双方同时发起协商时会发生「碰撞」，MDN 上的 <strong>Perfect Negotiation</strong>（完美协商）模式给出了标准解法：
+    约定一方为「礼让方」，碰撞时由它回滚自己的 offer。实际项目建议直接照搬这个模式。
+  </p>
+</div>
+
+<h2 id="r27-5"><span class="rn">27.5</span>跨标签页的真实连接</h2>
+
+<p class="prob">你想亲眼看到两个独立的页面通过 WebRTC 直连。</p>
+
+<p>
+  下面的演示用 <code>BroadcastChannel</code> 作为信令：在<strong>两个标签页</strong>中打开本页，在其中一个点「连接」。
+  信令只负责传递 offer、answer 和候选；连接建立后，聊天消息就通过 WebRTC 数据通道直接传输了（BroadcastChannel 不再参与）。
+</p>
+
+<div class="demo">
+  <div class="h">试一试 ②：在两个标签页中打开本页，然后点击「连接」</div>
+  <div class="b">
+    <div class="row">
+      <button id="xt-connect">连接到另一个标签页</button>
+      <button id="xt-open">在新标签页打开本页</button>
+      <span class="hint" id="xt-state"></span>
+    </div>
+    <div class="chat" id="xt-chat" style="height:140px"></div>
+    <div class="row"><input id="xt-in" placeholder="连接后发送消息……" style="flex:1"><button id="xt-send" disabled>发送</button></div>
+  </div>
+</div>
+
+<h2 id="r27-6"><span class="rn">27.6</span>监控连接状态</h2>
+
+<p class="prob">通话中网络波动了，你想提示用户「连接不稳定」，断线时自动重连。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="RTCPeerConnection 的 connectionState 变化">
+  <rect class="bx" x="20" y="60" width="100" height="40" rx="20"/><text class="mono" x="70" y="85" text-anchor="middle" style="font-size:11px">new</text>
+  <rect class="bx-a" x="150" y="60" width="120" height="40" rx="20"/><text class="mono on-a" x="210" y="85" text-anchor="middle" style="font-size:11px">connecting</text>
+  <rect class="bx-g" x="300" y="60" width="120" height="40" rx="20"/><text class="mono on-g" x="360" y="85" text-anchor="middle" style="font-size:11px">connected</text>
+  <rect class="bx-p" x="460" y="14" width="130" height="40" rx="20"/><text class="mono on-p" x="525" y="39" text-anchor="middle" style="font-size:11px">disconnected</text>
+  <rect class="bx-r" x="460" y="106" width="130" height="40" rx="20"/><text class="mono on-r" x="525" y="131" text-anchor="middle" style="font-size:11px">failed</text>
+  <rect class="bx" x="640" y="60" width="100" height="40" rx="20"/><text class="mono" x="690" y="85" text-anchor="middle" style="font-size:11px">closed</text>
+  <path class="ln" d="M122 80 H146" marker-end="url(#ar)"/>
+  <path class="ln" d="M272 80 H296" marker-end="url(#ar)"/>
+  <path class="ln-p" d="M422 72 L456 44" marker-end="url(#ar-p)"/>
+  <path class="ln-r" d="M422 88 L456 116" marker-end="url(#ar-r)"/>
+  <path class="ln-p" d="M525 56 V104" marker-end="url(#ar-p)"/>
+  <path class="ln" d="M592 80 H636" marker-end="url(#ar)"/>
+  <text class="sm on-p" x="600" y="40">网络抖动，可能自动恢复</text>
+  <text class="sm on-r" x="600" y="136">需要 restartIce() 或重建</text>
+  <text class="sm" x="380" y="164" text-anchor="middle">pc.close() → closed</text>
+</svg>
+<figcaption>图 27-4　connectionState：disconnected 是暂时的，failed 才需要干预</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+pc.addEventListener('connectionstatechange', () => {
+  switch (pc.connectionState) {
+    case 'connected':    showStatus('已连接'); break;
+    case 'disconnected': showStatus('网络不稳定，正在重试…'); break;   // 常常几秒后自动恢复
+    case 'failed':       pc.restartIce(); break;                        // 重新收集候选并协商
+    case 'closed':       showStatus('通话已结束'); break;
+  }
+});
+
+// 质量统计：往返时间、丢包、码率、实际使用的候选类型
+const stats = await pc.getStats();
+stats.forEach(report => {
+  if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
+    console.log('往返时间', report.currentRoundTripTime * 1000, 'ms');
+  }
+});
+</script>
+</div>
+
+<h2 id="scale">多人通话：Mesh 与 SFU</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="多人通话的两种拓扑：Mesh 与 SFU">
+  <text class="ttl" x="190" y="24" text-anchor="middle">Mesh：每两人之间一条连接</text>
+  <circle cx="110" cy="80" r="24" class="bx-b" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/><text class="sm on-b" x="110" y="84" text-anchor="middle">A</text>
+  <circle cx="270" cy="80" r="24" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/><text class="sm on-b" x="270" y="84" text-anchor="middle">B</text>
+  <circle cx="110" cy="180" r="24" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/><text class="sm on-b" x="110" y="184" text-anchor="middle">C</text>
+  <circle cx="270" cy="180" r="24" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/><text class="sm on-b" x="270" y="184" text-anchor="middle">D</text>
+  <path class="ln-b" d="M134 80 H246 M110 104 V156 M270 104 V156 M134 180 H246 M128 96 L252 164 M252 96 L128 164"/>
+  <text class="sm" x="190" y="226" text-anchor="middle">n 人需要 n(n-1)/2 条连接，每人要上传 n-1 份视频</text>
+
+  <text class="ttl" x="570" y="24" text-anchor="middle">SFU：所有人连到一台转发服务器</text>
+  <rect class="bx-a" x="530" y="110" width="80" height="40" rx="8"/><text class="lbl on-a" x="570" y="135" text-anchor="middle">SFU</text>
+  <circle cx="470" cy="70" r="24" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/><text class="sm on-g" x="470" y="74" text-anchor="middle">A</text>
+  <circle cx="670" cy="70" r="24" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/><text class="sm on-g" x="670" y="74" text-anchor="middle">B</text>
+  <circle cx="470" cy="190" r="24" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/><text class="sm on-g" x="470" y="194" text-anchor="middle">C</text>
+  <circle cx="670" cy="190" r="24" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/><text class="sm on-g" x="670" y="194" text-anchor="middle">D</text>
+  <path class="ln-g" d="M490 84 L534 112 M650 84 L606 112 M490 176 L534 148 M650 176 L606 148"/>
+  <text class="sm" x="570" y="226" text-anchor="middle">每人只上传 1 份，服务器负责转发（不解码）</text>
+</svg>
+<figcaption>图 27-5　两三个人用 Mesh 很简单；人再多，就需要 SFU</figcaption>
+</figure>
+
+<p>
+  Mesh 结构下，每个人都要把自己的视频分别发给其他每个人，4–5 人以上时上行带宽和 CPU 很快就撑不住。
+  大多数视频会议产品使用 <strong>SFU</strong>（Selective Forwarding Unit）：每人只把视频发给服务器一次，由服务器按需转发给其他人。
+  开源方案有 LiveKit、mediasoup、Janus 等；它们都提供浏览器 SDK，底层依然是本章的 <code>RTCPeerConnection</code>。
+</p>
+
+<h2 id="security">安全与隐私</h2>
+
+<ul>
+  <li><strong>强制加密</strong>：WebRTC 的所有媒体和数据都通过 DTLS / SRTP 加密，无法关闭。SDP 中的证书指纹保证了加密握手的对象就是信令里说的那个人 —— 所以<strong>信令通道本身也必须安全</strong>（HTTPS / WSS，并做身份认证）。</li>
+  <li><strong>IP 地址暴露</strong>：点对点连接意味着对方能看到你的公网 IP。浏览器会用 mDNS 隐藏内网地址，但公网地址（srflx 候选）依然可见。对隐私敏感的场景，可以设置 <code>iceTransportPolicy: 'relay'</code>，只通过 TURN 中转。</li>
+  <li><strong>权限</strong>：摄像头、麦克风、屏幕共享都需要用户授权（第 18 章），浏览器会在标签页上显示录制指示。</li>
+</ul>
+
+<div class="box new">
+  <div class="t">&#10024; WebRTC 与其他实时技术</div>
+  <div class="tw">
+  <table>
+    <tr><th>技术</th><th>适合</th></tr>
+    <tr><td>WebSocket（第 4 章）</td><td>客户端 ↔ 服务器的实时消息：聊天、通知、协同编辑</td></tr>
+    <tr><td>WebRTC</td><td>客户端 ↔ 客户端的低延迟音视频和数据：通话、会议、P2P 传输</td></tr>
+    <tr><td>WebRTC + WHIP / WHEP</td><td>用 WebRTC 做超低延迟直播推流 / 拉流的标准化 HTTP 信令协议</td></tr>
+    <tr><td>WebTransport（第 4 章）</td><td>客户端 ↔ 服务器，基于 HTTP/3 的多路流和数据报：云游戏、自定义媒体传输</td></tr>
+  </table>
+  </div>
+  <p>RTCPeerConnection、数据通道、<code>setLocalDescription()</code> 无参调用、<code>restartIce()</code> 在各主流浏览器中都已 <span class="bl wide">广泛可用</span>。</p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>WebRTC 让浏览器之间直接传输音视频和数据，全程加密；建立连接前需要通过你自己选择的信令通道交换 offer / answer 和 ICE 候选。</li>
+  <li><code>setLocalDescription()</code> 自动生成 offer 或 answer；<code>icecandidate</code> 事件产生的候选要转发给对方并 <code>addIceCandidate()</code>。</li>
+  <li>ICE 依次尝试本机地址、STUN 发现的公网地址、TURN 中转；生产环境必须部署 TURN。</li>
+  <li><code>createDataChannel</code> / <code>datachannel</code> 事件收发数据；<code>addTrack</code> / <code>track</code> 事件传输音视频，<code>replaceTrack</code> 切换来源。</li>
+  <li>用 <code>connectionState</code> 和 <code>getStats()</code> 监控连接；多人场景使用 SFU。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>把本章跨标签页演示的信令从 BroadcastChannel 换成 WebSocket（用 Node.js 的 <code>ws</code> 库写一个只做「转发」的服务器），实现两台电脑之间的聊天。</li>
+    <li>用数据通道实现 P2P 文件传输：用第 10 章读取文件，按 64KB 分块发送，接收方拼成 Blob 后提供下载，并显示进度。</li>
+    <li>给一对一视频通话加上「屏幕共享」按钮（<code>replaceTrack</code>），以及「静音」「关闭摄像头」按钮。</li>
+    <li>每秒调用一次 <code>getStats()</code>，用第 25 章的 Canvas 画出往返时间和接收码率的实时曲线。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  function addMsg(box, cls, text) { var p = document.createElement('div'); p.className = cls; p.textContent = text; box.append(p); box.scrollTop = box.scrollHeight; }
+  var supported = 'RTCPeerConnection' in window;
+
+  // ================= 演示 ①：同页回环 =================
+  var log = document.getElementById('lb-log'), state = document.getElementById('lb-state');
+  var chatA = document.getElementById('lb-chat-a'), chatB = document.getElementById('lb-chat-b');
+  var pcA, pcB, chA, chB, camStream;
+  function L(s) { if (log.textContent.indexOf('信令日志') === 0) log.textContent = ''; log.textContent += s + '\n'; log.scrollTop = log.scrollHeight; }
+  function short(sdp) { return sdp.split('\r\n').filter(function (l) { return /^m=|a=fingerprint|a=ice-ufrag/.test(l); }).map(function (l) { return '      ' + l.slice(0, 70); }).join('\n'); }
+  function enable(on) {
+    ['lb-send-a', 'lb-send-b', 'lb-close', 'lb-cam'].forEach(function (id) { document.getElementById(id).disabled = !on; });
+    document.getElementById('lb-connect').disabled = on;
+  }
+  async function negotiate() {
+    await pcA.setLocalDescription();
+    L('Alice → 信令：offer\n' + short(pcA.localDescription.sdp));
+    await pcB.setRemoteDescription(pcA.localDescription);
+    await pcB.setLocalDescription();
+    L('Bob → 信令：answer\n' + short(pcB.localDescription.sdp));
+    await pcA.setRemoteDescription(pcB.localDescription);
+  }
+  document.getElementById('lb-connect').onclick = async function () {
+    if (!supported) { state.textContent = '当前浏览器不支持 WebRTC'; return; }
+    log.textContent = ''; chatA.textContent = ''; chatB.textContent = '';
+    pcA = new RTCPeerConnection(); pcB = new RTCPeerConnection();
+    pcA.onicecandidate = function (e) { if (e.candidate) { L('Alice → 信令：候选 ' + e.candidate.candidate.split(' ').slice(4, 8).join(' ')); pcB.addIceCandidate(e.candidate); } };
+    pcB.onicecandidate = function (e) { if (e.candidate) { L('Bob → 信令：候选 ' + e.candidate.candidate.split(' ').slice(4, 8).join(' ')); pcA.addIceCandidate(e.candidate); } };
+    pcA.onconnectionstatechange = function () { state.textContent = 'connectionState：' + pcA.connectionState; L('【Alice connectionState = ' + pcA.connectionState + '】'); };
+    pcA.onnegotiationneeded = function () { if (pcA.remoteDescription) { L('— negotiationneeded：重新协商 —'); negotiate(); } };
+    pcB.ontrack = function (e) { document.getElementById('lb-video').srcObject = e.streams[0]; L('Bob 收到轨道：' + e.track.kind); };
+    chA = pcA.createDataChannel('chat');
+    chA.onopen = function () { addMsg(chatA, 'sys', '数据通道已打开'); enable(true); };
+    chA.onmessage = function (e) { addMsg(chatA, 'them', 'Bob：' + e.data); };
+    pcB.ondatachannel = function (e) {
+      chB = e.channel; addMsg(chatB, 'sys', '收到数据通道「' + chB.label + '」');
+      chB.onmessage = function (ev) { addMsg(chatB, 'them', 'Alice：' + ev.data); };
+    };
+    await negotiate();
+  };
+  function sendFrom(who) {
+    var input = document.getElementById('lb-in-' + who), ch = who === 'a' ? chA : chB, box = who === 'a' ? chatA : chatB;
+    if (!input.value || !ch || ch.readyState !== 'open') return;
+    ch.send(input.value); addMsg(box, 'me', '我：' + input.value); input.value = '';
+  }
+  document.getElementById('lb-send-a').onclick = function () { sendFrom('a'); };
+  document.getElementById('lb-send-b').onclick = function () { sendFrom('b'); };
+  ['a', 'b'].forEach(function (w) { document.getElementById('lb-in-' + w).addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) sendFrom(w); }); });
+  document.getElementById('lb-cam').onclick = async function () {
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      camStream.getTracks().forEach(function (t) { pcA.addTrack(t, camStream); });
+      this.disabled = true;
+    } catch (e) { L('摄像头：' + e.name + ' ' + e.message); }
+  };
+  document.getElementById('lb-close').onclick = function () {
+    pcA && pcA.close(); pcB && pcB.close();
+    if (camStream) camStream.getTracks().forEach(function (t) { t.stop(); });
+    document.getElementById('lb-video').srcObject = null;
+    state.textContent = '已断开（pc.close()）'; enable(false);
+  };
+
+  // ================= 演示 ②：跨标签页，BroadcastChannel 作为信令 =================
+  var xs = document.getElementById('xt-state'), xchat = document.getElementById('xt-chat');
+  var myId = Math.random().toString(36).slice(2, 8), peerId = null, pc = null, ch = null, pending = [];
+  if (!supported || !('BroadcastChannel' in window)) { xs.textContent = '当前浏览器不支持 WebRTC 或 BroadcastChannel'; return; }
+  var bc = new BroadcastChannel('webapi-tutorial-webrtc');
+  function signal(msg) { msg.from = myId; msg.to = peerId; bc.postMessage(msg); }
+  function setupChannel(c) {
+    ch = c;
+    ch.onopen = function () { xs.textContent = '✓ 已直连（WebRTC 数据通道）'; addMsg(xchat, 'sys', '数据通道已打开，之后的消息直接走 WebRTC'); document.getElementById('xt-send').disabled = false; };
+    ch.onmessage = function (e) { addMsg(xchat, 'them', '对方：' + e.data); };
+    ch.onclose = function () { xs.textContent = '连接已关闭'; document.getElementById('xt-send').disabled = true; };
+  }
+  function newPc() {
+    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    pc.onicecandidate = function (e) { if (e.candidate) signal({ type: 'candidate', candidate: e.candidate.toJSON() }); };
+    pc.onconnectionstatechange = function () { xs.textContent = 'connectionState：' + pc.connectionState; };
+    pc.ondatachannel = function (e) { setupChannel(e.channel); };
+  }
+  async function flush() { while (pending.length) await pc.addIceCandidate(pending.shift()); }
+  bc.onmessage = async function (e) {
+    var m = e.data;
+    if (m.from === myId || (m.to && m.to !== myId)) return;
+    if (m.type === 'hello') { bc.postMessage({ type: 'here', from: myId, to: m.from }); if (!peerId) xs.textContent = '检测到另一个标签页，可以连接了'; return; }
+    if (m.type === 'here') { if (!peerId) xs.textContent = '检测到另一个标签页，可以连接了'; return; }
+    if (m.type === 'offer') {
+      peerId = m.from; if (pc) pc.close(); newPc();
+      addMsg(xchat, 'sys', '收到 offer（经 BroadcastChannel）');
+      await pc.setRemoteDescription(m.sdp); await pc.setLocalDescription();
+      signal({ type: 'answer', sdp: pc.localDescription.toJSON() }); await flush();
+      addMsg(xchat, 'sys', '已发送 answer');
+    } else if (m.type === 'answer' && pc) {
+      peerId = m.from;
+      addMsg(xchat, 'sys', '收到 answer');
+      await pc.setRemoteDescription(m.sdp); await flush();
+    } else if (m.type === 'candidate') {
+      if (pc && pc.remoteDescription) await pc.addIceCandidate(m.candidate); else pending.push(m.candidate);
+    }
+  };
+  bc.postMessage({ type: 'hello', from: myId });
+  xs.textContent = '本页 ID：' + myId + '，等待另一个标签页……';
+  document.getElementById('xt-connect').onclick = async function () {
+    peerId = null; if (pc) pc.close(); newPc();
+    setupChannel(pc.createDataChannel('chat'));
+    await pc.setLocalDescription();
+    signal({ type: 'offer', sdp: pc.localDescription.toJSON() });
+    addMsg(xchat, 'sys', '已发送 offer（经 BroadcastChannel）');
+  };
+  document.getElementById('xt-open').onclick = function () { window.open(location.href.split('#')[0] + '#r27-5', '_blank'); };
+  function xsend() {
+    var i = document.getElementById('xt-in');
+    if (!i.value || !ch || ch.readyState !== 'open') return;
+    ch.send(i.value); addMsg(xchat, 'me', '我：' + i.value); i.value = '';
+  }
+  document.getElementById('xt-send').onclick = xsend;
+  document.getElementById('xt-in').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) xsend(); });
+})();
+</script>
+</body>
+</html>

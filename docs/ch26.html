@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 26 章 · Web Audio API — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .piano { display: flex; gap: 4px; margin-top: 10px; user-select: none; touch-action: none; }
+  .piano .key { flex: 1; height: 110px; border: 1px solid var(--line-2); border-radius: 0 0 8px 8px; background: #fff; color: #555;
+                display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding-bottom: 8px; font-size: 12px; cursor: pointer; }
+  .piano .key.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-2); }
+  .piano .key small { color: #999; font-size: 11px; }
+  .seq { display: grid; grid-template-columns: 70px repeat(8, 1fr); gap: 4px; margin-top: 10px; align-items: center; font-size: 13px; }
+  .seq button.step { height: 32px; padding: 0 !important; border-radius: 6px !important; }
+  .seq button.step.on { background: var(--accent) !important; border-color: var(--accent) !important; }
+  .seq button.step.now { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .viz { width: 100%; height: 150px; display: block; border-radius: 8px; background: var(--code-bg); margin-top: 10px; }
+</style>
+</head>
+<body data-chapter="26">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 26 章 · 补充篇</span>
+<h1>Web Audio API</h1>
+<p class="lede">
+  <code>&lt;audio&gt;</code> 元素能播放一个音频文件，但仅此而已。<strong>Web Audio API</strong> 则是一套完整的「音频工作站」：
+  你可以凭空合成声音、精确到毫秒地安排节奏、实时加上混响和滤波、分析频谱画出可视化效果。
+  网页游戏的音效、在线合成器、音乐教学应用、语音处理，都靠它实现。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解 <code>AudioContext</code> 与「音频节点图」的工作方式，以及自动播放限制</li>
+    <li>用振荡器和增益节点合成声音，用包络消除爆音</li>
+    <li>用音频时钟精确调度，做一个节拍器 / 鼓机</li>
+    <li>播放音频文件、接入麦克风，加上滤波、声像等效果</li>
+    <li>用 <code>AnalyserNode</code> 配合第 25 章的 Canvas 画出波形和频谱</li>
+  </ul>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 本章的演示会发出声音</div>
+  <p>请先把音量调小。浏览器要求用户与页面交互后才能播放声音，所以每个演示都需要先点一下按钮。</p>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">音频节点图</h2>
+
+<p>
+  Web Audio 的核心思想来自真实的录音棚：声音从<strong>音源</strong>出发，经过一串<strong>效果器</strong>，最后送到<strong>音箱</strong>。
+  在代码里，每一个环节都是一个<strong>节点</strong>（AudioNode），用 <code>connect()</code> 把它们连成一张图：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 260" role="img" aria-label="Web Audio 的节点图：音源、处理节点、输出">
+  <text class="ttl on-b" x="95" y="24" text-anchor="middle">音源</text>
+  <text class="ttl on-a" x="380" y="24" text-anchor="middle">处理节点</text>
+  <text class="ttl on-g" x="665" y="24" text-anchor="middle">输出</text>
+
+  <rect class="bx-b" x="20" y="40" width="150" height="40" rx="8"/><text class="mono on-b" x="95" y="64" text-anchor="middle" style="font-size:11px">OscillatorNode</text>
+  <rect class="bx-b" x="20" y="92" width="150" height="40" rx="8"/><text class="mono on-b" x="95" y="116" text-anchor="middle" style="font-size:11px">AudioBufferSource</text>
+  <rect class="bx-b" x="20" y="144" width="150" height="40" rx="8"/><text class="mono on-b" x="95" y="168" text-anchor="middle" style="font-size:11px">MediaElementSource</text>
+  <rect class="bx-b" x="20" y="196" width="150" height="40" rx="8"/><text class="mono on-b" x="95" y="220" text-anchor="middle" style="font-size:11px">MediaStreamSource</text>
+
+  <rect class="bx-a" x="230" y="92" width="130" height="40" rx="8"/><text class="mono on-a" x="295" y="116" text-anchor="middle" style="font-size:11px">BiquadFilter</text>
+  <rect class="bx-a" x="400" y="92" width="110" height="40" rx="8"/><text class="mono on-a" x="455" y="116" text-anchor="middle" style="font-size:11px">GainNode</text>
+  <rect class="bx" x="400" y="160" width="110" height="40" rx="8"/><text class="mono" x="455" y="184" text-anchor="middle" style="font-size:11px">AnalyserNode</text>
+
+  <rect class="bx-g" x="570" y="92" width="170" height="40" rx="8"/><text class="mono on-g" x="655" y="116" text-anchor="middle" style="font-size:11px">ctx.destination 🔊</text>
+
+  <path class="ln-b" d="M172 60 L226 104" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M172 112 H226" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M172 164 L226 122" marker-end="url(#ar-b)"/>
+  <path class="ln-b" d="M172 216 L226 128" marker-end="url(#ar-b)"/>
+  <path class="ln-a" d="M362 112 H396" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M512 112 H566" marker-end="url(#ar-a)"/>
+  <path class="ln" d="M455 134 V156" marker-end="url(#ar)"/>
+  <text class="sm" x="530" y="186">只分析，不改变声音</text>
+
+  <text class="sm" x="95" y="252" text-anchor="middle">合成 · 音频文件 · &lt;audio&gt; · 麦克风</text>
+  <text class="sm" x="380" y="72" text-anchor="middle">滤波 · 音量 · 延迟 · 混响 · 声像 · 压缩 …</text>
+  <text class="sm" x="655" y="156" text-anchor="middle">扬声器 / 耳机</text>
+</svg>
+<figcaption>图 26-1　声音沿着 connect() 连成的节点图流动，最终到达 destination</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const ctx = new AudioContext();            // 整个音频图的「工作台」，通常一个页面只创建一个
+
+const osc = new OscillatorNode(ctx, { type: 'sine', frequency: 440 });   // 音源：440Hz 正弦波（标准音 A）
+const gain = new GainNode(ctx, { gain: 0.2 });                           // 音量：20%
+
+osc.connect(gain).connect(ctx.destination);   // connect 返回目标节点，可以链式调用
+
+osc.start();                                   // 开始发声
+osc.stop(ctx.currentTime + 1);                 // 1 秒后停止
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 自动播放限制：AudioContext 一开始是「暂停」的</div>
+  <p>
+    和第 6 章的视频一样，浏览器不允许网页在用户交互前发出声音。在页面加载时创建的 <code>AudioContext</code>，其 <code>state</code> 是 <code>'suspended'</code>，
+    需要在点击等事件中调用 <code>ctx.resume()</code> 才会真正开始工作：
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+playButton.addEventListener('click', async () => {
+  if (ctx.state === 'suspended') await ctx.resume();
+  playSound();
+});
+</script>
+  </div>
+</div>
+
+<h2 id="r26-1"><span class="rn">26.1</span>合成声音：振荡器</h2>
+
+<p class="prob">你要给游戏加一些音效（按钮提示音、得分音），但不想为每个音效都准备一个音频文件。</p>
+
+<p>
+  声音就是空气的振动。<strong>振荡器</strong>按指定的<strong>频率</strong>（每秒振动多少次，单位 Hz）和<strong>波形</strong>产生信号。
+  频率决定音高，波形决定音色：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="四种振荡器波形">
+  <g>
+    <path d="M20 70 C 40 20, 60 20, 80 70 S 120 120, 140 70 S 180 20, 200 70" style="fill:none;stroke:var(--blue);stroke-width:2.5"/>
+    <text class="mono on-b" x="110" y="140" text-anchor="middle">sine 正弦</text>
+    <text class="sm" x="110" y="158" text-anchor="middle">纯净、柔和（音叉、口哨）</text>
+  </g>
+  <g>
+    <path d="M210 110 V30 H250 V110 H290 V30 H330 V110 H370 V30" style="fill:none;stroke:var(--green);stroke-width:2.5"/>
+    <text class="mono on-g" x="290" y="140" text-anchor="middle">square 方波</text>
+    <text class="sm" x="290" y="158" text-anchor="middle">空洞、8-bit 游戏机</text>
+  </g>
+  <g>
+    <path d="M390 110 L450 30 V110 L510 30 V110 L570 30 V110" style="fill:none;stroke:var(--accent);stroke-width:2.5"/>
+    <text class="mono on-a" x="480" y="140" text-anchor="middle">sawtooth 锯齿波</text>
+    <text class="sm" x="480" y="158" text-anchor="middle">明亮、刺耳（合成器铜管）</text>
+  </g>
+  <g>
+    <path d="M590 110 L620 30 L650 110 L680 30 L710 110 L740 30" style="fill:none;stroke:var(--purple);stroke-width:2.5"/>
+    <text class="mono on-p" x="665" y="140" text-anchor="middle">triangle 三角波</text>
+    <text class="sm" x="665" y="158" text-anchor="middle">介于正弦和方波之间</text>
+  </g>
+</svg>
+<figcaption>图 26-2　振荡器的四种内置波形</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 把音符编号（MIDI 编号，60 = 中央 C）换算成频率：每高一个半音，频率乘以 2 的 1/12 次方
+const noteToFreq = note => 440 * 2 ** ((note - 69) / 12);
+
+function beep(note, duration = 0.3, type = 'triangle') {
+  const osc = new OscillatorNode(ctx, { type, frequency: noteToFreq(note) });
+  const gain = new GainNode(ctx, { gain: 0.2 });
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + duration);
+}
+
+beep(72);   // C5
+</script>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 音源节点是「一次性」的</div>
+  <p>
+    <code>OscillatorNode</code> 和 <code>AudioBufferSourceNode</code> 只能 <code>start()</code> 一次，停止后就不能再用了。
+    每次要发声都<strong>新建一个</strong>，这很便宜，不必担心性能；它们停止后，如果没有别的引用，会被自动回收。
+  </p>
+</div>
+
+<h2 id="r26-2"><span class="rn">26.2</span>用包络消除爆音</h2>
+
+<p class="prob">用上面的 <code>beep</code> 连续播放，每个音开始和结束时都有「啪」的一声杂音。</p>
+
+<p>
+  原因是波形被<strong>突然截断</strong>：振荡器在任意位置开始或停止，扬声器的振膜瞬间跳变，就会产生一声「咔哒」。
+  解决办法是让音量平滑地升起和落下，这条随时间变化的音量曲线叫<strong>包络</strong>（envelope）：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="突然截断与 ADSR 包络的对比">
+  <text class="ttl on-r" x="20" y="24">✗ 直接 start / stop</text>
+  <path class="ln" d="M20 110 H360" />
+  <path d="M40 110 V50 H320 V110" style="fill:none;stroke:var(--red);stroke-width:2.5"/>
+  <text class="sm on-r" x="40" y="130" text-anchor="middle">咔</text>
+  <text class="sm on-r" x="320" y="130" text-anchor="middle">哒</text>
+  <text class="sm" x="180" y="150" text-anchor="middle">音量瞬间跳变 → 爆音</text>
+
+  <text class="ttl on-g" x="400" y="24">✓ ADSR 包络</text>
+  <path class="ln" d="M400 110 H740"/>
+  <path d="M410 110 L440 40 L480 64 L650 64 L720 110" style="fill:var(--green-bg);stroke:var(--green);stroke-width:2.5"/>
+  <text class="sm on-g" x="425" y="130" text-anchor="middle">A</text>
+  <text class="sm on-g" x="460" y="130" text-anchor="middle">D</text>
+  <text class="sm on-g" x="565" y="130" text-anchor="middle">S</text>
+  <text class="sm on-g" x="685" y="130" text-anchor="middle">R</text>
+  <text class="sm" x="400" y="160">A 起音：从 0 升到峰值　D 衰减：落到持续音量</text>
+  <text class="sm" x="400" y="178">S 持续：按住时保持　R 释音：松开后渐渐消失</text>
+  <text class="sm" x="380" y="212" text-anchor="middle">钢琴是「A 很短、没有 S」，小提琴是「A 较长、S 很高」—— 包络本身也是音色的重要组成部分</text>
+</svg>
+<figcaption>图 26-3　包络：用平滑的音量变化代替突然的开关</figcaption>
+</figure>
+
+<p>
+  音量（<code>gain.gain</code>）、频率（<code>osc.frequency</code>）这些可以随时间变化的参数都是 <code>AudioParam</code>，
+  它们可以<strong>预先安排</strong>好在音频时间线上的变化，由音频线程精确执行：
+</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+function playNote(note, duration = 0.5) {
+  const t = ctx.currentTime;          // 音频时钟：从 AudioContext 创建起经过的秒数，精度极高
+  const osc = new OscillatorNode(ctx, { type: 'triangle', frequency: noteToFreq(note) });
+  const env = new GainNode(ctx, { gain: 0 });
+  osc.connect(env).connect(ctx.destination);
+
+  const g = env.gain;
+  g.setValueAtTime(0, t);                              // 从 0 开始
+  g.linearRampToValueAtTime(0.3, t + 0.01);            // A：10ms 升到 0.3
+  g.linearRampToValueAtTime(0.2, t + 0.1);             // D：落到 0.2
+  g.setValueAtTime(0.2, t + duration);                 // S：保持到音符结束
+  g.exponentialRampToValueAtTime(0.0001, t + duration + 0.3);   // R：300ms 淡出（指数曲线听起来更自然，但不能到 0）
+
+  osc.start(t);
+  osc.stop(t + duration + 0.3);       // 等淡出结束再停
+}
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>AudioParam 方法</th><th>效果</th></tr>
+  <tr><td><code>setValueAtTime(v, t)</code></td><td>在时刻 t 突变为 v</td></tr>
+  <tr><td><code>linearRampToValueAtTime(v, t)</code></td><td>从上一个值线性过渡，在 t 时到达 v</td></tr>
+  <tr><td><code>exponentialRampToValueAtTime(v, t)</code></td><td>指数过渡（适合音量和频率，符合人耳感知）；v 不能是 0</td></tr>
+  <tr><td><code>setTargetAtTime(v, t, 时间常数)</code></td><td>从 t 开始向 v 渐近（常用于「松开按键时淡出」）</td></tr>
+  <tr><td><code>cancelScheduledValues(t)</code></td><td>取消 t 之后安排好的变化</td></tr>
+</table>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：迷你钢琴（点击琴键，或按键盘 A S D F G H J K）</div>
+  <div class="b">
+    <div class="row">
+      <label class="hint">波形 <select id="pi-wave"><option>triangle</option><option>sine</option><option>square</option><option>sawtooth</option></select></label>
+      <label class="hint"><input type="checkbox" id="pi-env" checked> 使用包络（取消勾选听听爆音）</label>
+    </div>
+    <div class="piano" id="piano"></div>
+  </div>
+</div>
+
+<h2 id="r26-3"><span class="rn">26.3</span>精确调度：节拍器与鼓机</h2>
+
+<p class="prob">你想做一个节拍器或鼓机，但用 <code>setInterval</code> 播放的节奏总是忽快忽慢。</p>
+
+<p>
+  JS 的定时器跑在主线程上，主线程一忙（第 21 章），回调就会迟到几毫秒到几十毫秒，人耳对节奏的偏差非常敏感。
+  而 <code>ctx.currentTime</code> 是运行在独立音频线程上的<strong>音频时钟</strong>，<code>osc.start(t)</code> 可以精确到采样级别。
+  正确的做法是「<strong>两个时钟配合</strong>」：用不精确的 JS 定时器频繁地「往前看」，把接下来一小段时间内的音符，提前交给精确的音频时钟去安排：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="用 JS 定时器提前安排、由音频时钟精确播放">
+  <text class="ttl on-r" x="20" y="24">✗ 在 setInterval 回调里直接播放</text>
+  <path class="ln" d="M20 60 H740" marker-end="url(#ar)"/>
+  <g>
+    <path class="ln-d" d="M80 40 V80 M230 40 V80 M380 40 V80 M530 40 V80 M680 40 V80"/>
+    <circle cx="86" cy="60" r="7" style="fill:var(--red)"/>
+    <circle cx="244" cy="60" r="7" style="fill:var(--red)"/>
+    <circle cx="380" cy="60" r="7" style="fill:var(--red)"/>
+    <circle cx="561" cy="60" r="7" style="fill:var(--red)"/>
+    <circle cx="688" cy="60" r="7" style="fill:var(--red)"/>
+  </g>
+  <text class="sm on-r" x="560" y="96" text-anchor="middle">主线程忙，迟到 30ms</text>
+  <text class="sm" x="80" y="96" text-anchor="middle">虚线 = 应该响的时刻</text>
+
+  <text class="ttl on-g" x="20" y="136">✓ 定时器每 25ms 检查一次，把未来 100ms 内的音符交给音频时钟</text>
+  <path class="ln" d="M20 190 H740" marker-end="url(#ar)"/>
+  <g>
+    <path class="ln-d" d="M80 170 V210 M230 170 V210 M380 170 V210 M530 170 V210 M680 170 V210"/>
+    <circle cx="80" cy="190" r="7" style="fill:var(--green)"/>
+    <circle cx="230" cy="190" r="7" style="fill:var(--green)"/>
+    <circle cx="380" cy="190" r="7" style="fill:var(--green)"/>
+    <circle cx="530" cy="190" r="7" style="fill:var(--green)"/>
+    <circle cx="680" cy="190" r="7" style="fill:var(--green)"/>
+  </g>
+  <rect class="bx-a" x="300" y="150" width="130" height="14" rx="3" style="opacity:.7"/>
+  <text class="sm on-a" x="438" y="162">← 「向前看」窗口</text>
+  <text class="sm on-g" x="380" y="236" text-anchor="middle">即使定时器迟到了，已经安排好的音符仍然按音频时钟准时发声</text>
+</svg>
+<figcaption>图 26-4　「两个时钟」：JS 负责提前安排，音频线程负责准时执行</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const LOOKAHEAD = 0.1;       // 每次安排未来 100ms 内的音符
+const TICK = 25;             // 每 25ms 检查一次
+let bpm = 120;
+let nextNoteTime = 0;        // 下一个音符应该在音频时钟的哪个时刻响
+let step = 0;
+
+function scheduler() {
+  while (nextNoteTime < ctx.currentTime + LOOKAHEAD) {
+    playStep(step, nextNoteTime);             // 用 start(nextNoteTime) 精确安排
+    nextNoteTime += 60 / bpm / 2;             // 八分音符的间隔（秒）
+    step = (step + 1) % 8;
+  }
+}
+
+function startSequencer() {
+  nextNoteTime = ctx.currentTime + 0.05;
+  timerId = setInterval(scheduler, TICK);
+}
+</script>
+</div>
+
+<h3>没有音频文件，也能「合成」鼓声</h3>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 底鼓：频率从 150Hz 迅速滑落到 40Hz 的正弦波
+function kick(t) {
+  const osc = new OscillatorNode(ctx, { frequency: 150 });
+  const env = new GainNode(ctx);
+  osc.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+  env.gain.setValueAtTime(1, t);
+  env.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+  osc.connect(env).connect(ctx.destination);
+  osc.start(t); osc.stop(t + 0.3);
+}
+
+// 踩镲：一段白噪声（随机数填满的 AudioBuffer），经过高通滤波器，快速衰减
+const noise = new AudioBuffer({ length: ctx.sampleRate, sampleRate: ctx.sampleRate });
+const data = noise.getChannelData(0);
+for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+function hihat(t) {
+  const src = new AudioBufferSourceNode(ctx, { buffer: noise });
+  const hp = new BiquadFilterNode(ctx, { type: 'highpass', frequency: 7000 });
+  const env = new GainNode(ctx);
+  env.gain.setValueAtTime(0.4, t);
+  env.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+  src.connect(hp).connect(env).connect(ctx.destination);
+  src.start(t); src.stop(t + 0.05);
+}
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：8 步鼓机（点击格子编排节奏）</div>
+  <div class="b">
+    <div class="row">
+      <button id="seq-play">▶ 播放</button>
+      <label class="hint">速度 <input type="range" id="seq-bpm" min="60" max="180" value="110"> <span id="seq-bpm-v">110</span> BPM</label>
+      <button id="seq-block">阻塞主线程 300ms</button>
+    </div>
+    <div class="seq" id="seq"></div>
+    <p class="hint">播放时点「阻塞主线程」：界面上的高亮会卡一下，但已经提前安排好的鼓点依然准时。</p>
+  </div>
+</div>
+
+<h2 id="r26-4"><span class="rn">26.4</span>音频文件、麦克风与效果器</h2>
+
+<p class="prob">你想播放游戏的背景音乐和音效文件，给声音加上「电话里」的滤波效果，或者处理麦克风的输入。</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 1. 短音效：下载 → 解码成 AudioBuffer → 可以反复、叠加、精确地播放
+const response = await fetch('/sounds/coin.mp3');
+const buffer = await ctx.decodeAudioData(await response.arrayBuffer());
+
+function playCoin() {
+  const src = new AudioBufferSourceNode(ctx, { buffer, playbackRate: 1 + Math.random() * 0.1 });  // 每次音高略有不同
+  src.connect(ctx.destination);
+  src.start();
+}
+
+// 2. 长音乐：不必全部解码进内存，把 <audio> 元素接入音频图（可以边下载边播放）
+const audioEl = document.querySelector('audio');
+const music = new MediaElementAudioSourceNode(ctx, { mediaElement: audioEl });
+
+// 3. 麦克风（第 18 章的 getUserMedia）
+const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+const mic = new MediaStreamAudioSourceNode(ctx, { mediaStream: stream });
+</script>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th>处理节点</th><th>作用</th><th>例子</th></tr>
+  <tr><td><code>GainNode</code></td><td>音量</td><td>主音量、淡入淡出、静音</td></tr>
+  <tr><td><code>BiquadFilterNode</code></td><td>滤波：低通、高通、带通、峰值……</td><td>「电话音」「水下音」、均衡器</td></tr>
+  <tr><td><code>StereoPannerNode</code></td><td>左右声像</td><td>游戏中声音从左边还是右边来</td></tr>
+  <tr><td><code>PannerNode</code></td><td>3D 空间定位</td><td>VR / 3D 游戏</td></tr>
+  <tr><td><code>DelayNode</code></td><td>延迟</td><td>回声效果（配合反馈回路）</td></tr>
+  <tr><td><code>ConvolverNode</code></td><td>卷积混响</td><td>模拟教堂、大厅的空间感</td></tr>
+  <tr><td><code>DynamicsCompressorNode</code></td><td>压缩</td><td>防止多个声音叠加时爆音</td></tr>
+  <tr><td><code>AnalyserNode</code></td><td>分析（不改变声音）</td><td>可视化、音高检测、音量表</td></tr>
+</table>
+</div>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 「电话音」：只保留 300–3400Hz 的中频
+const phone = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 1000, Q: 0.8 });
+music.connect(phone).connect(ctx.destination);
+
+// 回声：延迟 + 衰减的反馈回路（音频图允许环路，但环路中必须有 DelayNode）
+const delay = new DelayNode(ctx, { delayTime: 0.3 });
+const feedback = new GainNode(ctx, { gain: 0.4 });
+music.connect(delay).connect(feedback).connect(delay);   // 延迟后的声音再送回延迟
+delay.connect(ctx.destination);
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：低通滤波器扫频</div>
+  <div class="b">
+    <div class="row"><button id="flt-play">▶ 播放锯齿波和弦</button>
+      <label class="hint">截止频率 <input type="range" id="flt-freq" min="80" max="8000" value="600"> <span id="flt-freq-v">600</span> Hz</label>
+      <label class="hint">声像 <input type="range" id="flt-pan" min="-1" max="1" step="0.1" value="0"></label>
+    </div>
+    <p class="hint">截止频率越低，声音越「闷」：高频被滤掉了。建议戴耳机体验左右声像。</p>
+  </div>
+</div>
+
+<h2 id="r26-5"><span class="rn">26.5</span>可视化：波形与频谱</h2>
+
+<p class="prob">你想在播放音乐或录音时，显示跳动的频谱或波形。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="时域波形与频域频谱">
+  <rect class="bx" x="20" y="20" width="350" height="150" rx="10"/>
+  <text class="ttl" x="195" y="44" text-anchor="middle">时域：getByteTimeDomainData</text>
+  <path d="M40 110 C 60 60, 70 60, 90 110 S 120 150, 140 100 S 170 70, 190 110 S 220 140, 240 110 S 280 60, 300 110 S 330 140, 350 110" style="fill:none;stroke:var(--green);stroke-width:2"/>
+  <text class="sm" x="195" y="158" text-anchor="middle">横轴是时间，纵轴是振幅：声音「长什么样」</text>
+
+  <rect class="bx" x="390" y="20" width="350" height="150" rx="10"/>
+  <text class="ttl" x="565" y="44" text-anchor="middle">频域：getByteFrequencyData</text>
+  <g style="fill:var(--accent)">
+    <rect x="410" y="80" width="14" height="60"/><rect x="428" y="64" width="14" height="76"/><rect x="446" y="72" width="14" height="68"/>
+    <rect x="464" y="96" width="14" height="44"/><rect x="482" y="88" width="14" height="52"/><rect x="500" y="104" width="14" height="36"/>
+    <rect x="518" y="112" width="14" height="28"/><rect x="536" y="100" width="14" height="40"/><rect x="554" y="116" width="14" height="24"/>
+    <rect x="572" y="122" width="14" height="18"/><rect x="590" y="126" width="14" height="14"/><rect x="608" y="120" width="14" height="20"/>
+    <rect x="626" y="128" width="14" height="12"/><rect x="644" y="132" width="14" height="8"/><rect x="662" y="134" width="14" height="6"/>
+    <rect x="680" y="135" width="14" height="5"/><rect x="698" y="136" width="14" height="4"/>
+  </g>
+  <text class="sm" x="565" y="158" text-anchor="middle">横轴是频率（低 → 高），纵轴是能量：声音「由哪些音高组成」</text>
+  <text class="sm" x="380" y="196" text-anchor="middle">AnalyserNode 对最近 fftSize 个采样做快速傅里叶变换（FFT），每一帧都可以读取最新结果</text>
+</svg>
+<figcaption>图 26-5　同一段声音的两种视角</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const analyser = new AnalyserNode(ctx, { fftSize: 2048 });
+source.connect(analyser);                      // 分析节点可以接在图的任何位置，不影响声音
+analyser.connect(ctx.destination);
+
+const bins = new Uint8Array(analyser.frequencyBinCount);   // fftSize / 2 个频段
+
+function draw() {                               // 第 25 章的动画循环
+  analyser.getByteFrequencyData(bins);          // 每个频段的能量：0–255
+  canvasCtx.clearRect(0, 0, width, height);
+  const barWidth = width / bins.length;
+  bins.forEach((value, i) => {
+    const barHeight = (value / 255) * height;
+    canvasCtx.fillRect(i * barWidth, height - barHeight, barWidth, barHeight);
+  });
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：可视化本页发出的所有声音，或者你的麦克风</div>
+  <div class="b">
+    <div class="row">
+      <button id="viz-mode">切换：频谱 / 波形</button>
+      <button id="viz-mic">🎤 可视化麦克风</button>
+      <span class="hint" id="viz-info">弹奏上面的钢琴或播放鼓机，这里会实时显示</span>
+    </div>
+    <canvas class="viz" id="viz"></canvas>
+  </div>
+</div>
+
+<div class="box new">
+  <div class="t">&#10024; 自定义处理：AudioWorklet</div>
+  <p>
+    内置节点满足不了需求时（自己的合成算法、音高检测、降噪），可以用 <strong>AudioWorklet</strong> 编写运行在音频线程上的 JS（或 WebAssembly）处理器，
+    每次处理 128 个采样，延迟极低。<span class="bl wide">Baseline 广泛可用</span>
+    渲染不需要实时播放的音频（比如导出一段混音）时，可以用 <code>OfflineAudioContext</code>，它会以最快速度「离线」算完，再用第 18 章的方法导出。
+  </p>
+  <div class="code" data-lang="js">
+<script type="text/plain">
+// bitcrusher.js（在音频线程运行）
+registerProcessor('bitcrusher', class extends AudioWorkletProcessor {
+  process([input], [output]) {
+    input.forEach((channel, c) => channel.forEach((s, i) => {
+      output[c][i] = Math.round(s * 8) / 8;     // 降低精度，制造 8-bit 失真感
+    }));
+    return true;                                // 继续运行
+  }
+});
+
+// 页面中
+await ctx.audioWorklet.addModule('bitcrusher.js');
+const crusher = new AudioWorkletNode(ctx, 'bitcrusher');
+source.connect(crusher).connect(ctx.destination);
+</script>
+  </div>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>一个页面一个 <code>AudioContext</code>；它一开始是 suspended，要在用户交互中 <code>resume()</code>。</li>
+  <li>音源 → 处理节点 → <code>destination</code>，用 <code>connect()</code> 连成图；音源节点只能 <code>start()</code> 一次，每次新建。</li>
+  <li>振荡器合成声音，频率决定音高、波形决定音色；用 <code>AudioParam</code> 的自动化方法做包络，避免爆音。</li>
+  <li>需要准确节奏时，用 <code>ctx.currentTime</code> 提前安排（「向前看」调度），而不是在定时器回调里直接播放。</li>
+  <li>短音效用 <code>decodeAudioData</code> + <code>AudioBufferSourceNode</code>，长音乐接 <code>&lt;audio&gt;</code>，麦克风接 <code>MediaStreamAudioSourceNode</code>。</li>
+  <li><code>AnalyserNode</code> 提供波形与频谱数据，配合 Canvas 做可视化；自定义算法用 AudioWorklet。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>给第 20 章的待办列表加上音效：添加时「叮」一声上升音，删除时一声下降音，全部用振荡器合成。</li>
+    <li>扩展本章的鼓机：加入军鼓（噪声 + 带通 + 短正弦）、16 步、每个格子支持不同力度，并用第 2 章的 localStorage 保存编排。</li>
+    <li>做一个吉他调音器：接入麦克风，用 <code>AnalyserNode</code> 找出能量最大的频率，换算成最接近的音名并显示偏差。</li>
+    <li>做一个音乐播放器：<code>&lt;audio&gt;</code> 播放本地文件（第 10 章），加上三段均衡器（低 / 中 / 高三个 BiquadFilter）和频谱可视化。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  var ctx = null, master = null, analyser = null;
+  function audio() {
+    if (!ctx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      ctx = new AC();
+      master = new GainNode(ctx, { gain: 0.8 });
+      analyser = new AnalyserNode(ctx, { fftSize: 2048 });
+      master.connect(analyser); analyser.connect(ctx.destination);
+    }
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+  var noteToFreq = function (n) { return 440 * Math.pow(2, (n - 69) / 12); };
+
+  // ---- 钢琴 ----
+  var notes = [['C', 60, 'A'], ['D', 62, 'S'], ['E', 64, 'D'], ['F', 65, 'F'], ['G', 67, 'G'], ['A', 69, 'H'], ['B', 71, 'J'], ['C', 72, 'K']];
+  var piano = document.getElementById('piano'), voices = {};
+  notes.forEach(function (n) {
+    var k = document.createElement('div'); k.className = 'key'; k.dataset.note = n[1];
+    k.innerHTML = n[0] + '<small>' + n[2] + '</small>'; piano.append(k);
+  });
+  function noteOn(note) {
+    var c = audio(), t = c.currentTime, useEnv = document.getElementById('pi-env').checked;
+    if (voices[note]) return;
+    var osc = new OscillatorNode(c, { type: document.getElementById('pi-wave').value, frequency: noteToFreq(note) });
+    var env = new GainNode(c, { gain: useEnv ? 0 : 0.25 });
+    if (useEnv) { env.gain.setValueAtTime(0, t); env.gain.linearRampToValueAtTime(0.3, t + 0.01); env.gain.linearRampToValueAtTime(0.2, t + 0.1); }
+    osc.connect(env).connect(master); osc.start(t);
+    voices[note] = { osc: osc, env: env, useEnv: useEnv };
+    var el = piano.querySelector('[data-note="' + note + '"]'); if (el) el.classList.add('on');
+  }
+  function noteOff(note) {
+    var v = voices[note]; if (!v) return; delete voices[note];
+    var t = ctx.currentTime;
+    if (v.useEnv) { v.env.gain.cancelScheduledValues(t); v.env.gain.setTargetAtTime(0, t, 0.08); v.osc.stop(t + 0.6); }
+    else v.osc.stop(t);
+    var el = piano.querySelector('[data-note="' + note + '"]'); if (el) el.classList.remove('on');
+  }
+  piano.addEventListener('pointerdown', function (e) { var k = e.target.closest('.key'); if (k) { piano.setPointerCapture(e.pointerId); noteOn(+k.dataset.note); piano.dataset.active = k.dataset.note; } });
+  ['pointerup', 'pointercancel'].forEach(function (t) { piano.addEventListener(t, function () { if (piano.dataset.active) { noteOff(+piano.dataset.active); piano.dataset.active = ''; } }); });
+  var keyMap = {}; notes.forEach(function (n) { keyMap[n[2].toLowerCase()] = n[1]; });
+  document.addEventListener('keydown', function (e) {
+    if (e.repeat || e.isComposing || /input|textarea|select/i.test(e.target.tagName)) return;
+    var n = keyMap[e.key.toLowerCase()]; if (n) noteOn(n);
+  });
+  document.addEventListener('keyup', function (e) { var n = keyMap[e.key.toLowerCase()]; if (n) noteOff(n); });
+
+  // ---- 鼓机 ----
+  var rows = [['底鼓', 'kick', [1, 0, 0, 0, 1, 0, 0, 0]], ['军鼓', 'snare', [0, 0, 1, 0, 0, 0, 1, 0]], ['踩镲', 'hat', [1, 1, 1, 1, 1, 1, 1, 1]]];
+  var seq = document.getElementById('seq'), cells = [];
+  rows.forEach(function (r, ri) {
+    var label = document.createElement('span'); label.textContent = r[0]; seq.append(label); cells[ri] = [];
+    r[2].forEach(function (on, si) {
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'step' + (on ? ' on' : '');
+      b.setAttribute('aria-label', r[0] + ' 第 ' + (si + 1) + ' 步');
+      b.onclick = function () { r[2][si] = r[2][si] ? 0 : 1; b.classList.toggle('on'); };
+      seq.append(b); cells[ri][si] = b;
+    });
+  });
+  var noiseBuf = null;
+  function noise(c) {
+    if (!noiseBuf) { noiseBuf = new AudioBuffer({ length: c.sampleRate, sampleRate: c.sampleRate }); var d = noiseBuf.getChannelData(0); for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+    return noiseBuf;
+  }
+  var drums = {
+    kick: function (c, t) { var o = new OscillatorNode(c, { frequency: 150 }), g = new GainNode(c); o.frequency.exponentialRampToValueAtTime(40, t + 0.15); g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.3); o.connect(g).connect(master); o.start(t); o.stop(t + 0.3); },
+    snare: function (c, t) {
+      var s = new AudioBufferSourceNode(c, { buffer: noise(c) }), bp = new BiquadFilterNode(c, { type: 'bandpass', frequency: 1800, Q: 0.7 }), g = new GainNode(c);
+      g.gain.setValueAtTime(0.6, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.18); s.connect(bp).connect(g).connect(master); s.start(t); s.stop(t + 0.2);
+      var o = new OscillatorNode(c, { type: 'triangle', frequency: 190 }), og = new GainNode(c); og.gain.setValueAtTime(0.4, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.1); o.connect(og).connect(master); o.start(t); o.stop(t + 0.1);
+    },
+    hat: function (c, t) { var s = new AudioBufferSourceNode(c, { buffer: noise(c) }), hp = new BiquadFilterNode(c, { type: 'highpass', frequency: 7000 }), g = new GainNode(c); g.gain.setValueAtTime(0.3, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05); s.connect(hp).connect(g).connect(master); s.start(t); s.stop(t + 0.06); }
+  };
+  var bpm = 110, timer = null, nextTime = 0, step = 0, uiQueue = [];
+  document.getElementById('seq-bpm').oninput = function () { bpm = +this.value; document.getElementById('seq-bpm-v').textContent = bpm; };
+  function scheduler() {
+    while (nextTime < ctx.currentTime + 0.1) {
+      rows.forEach(function (r) { if (r[2][step]) drums[r[1]](ctx, nextTime); });
+      uiQueue.push({ step: step, time: nextTime });
+      nextTime += 60 / bpm / 2; step = (step + 1) % 8;
+    }
+  }
+  (function ui() {
+    if (ctx && timer) {
+      while (uiQueue.length && uiQueue[0].time <= ctx.currentTime) {
+        var s = uiQueue.shift().step;
+        cells.forEach(function (row) { row.forEach(function (b, i) { b.classList.toggle('now', i === s); }); });
+      }
+    }
+    requestAnimationFrame(ui);
+  })();
+  document.getElementById('seq-play').onclick = function () {
+    var c = audio();
+    if (timer) { clearInterval(timer); timer = null; this.textContent = '▶ 播放'; uiQueue = []; cells.forEach(function (r) { r.forEach(function (b) { b.classList.remove('now'); }); }); return; }
+    nextTime = c.currentTime + 0.05; step = 0; timer = setInterval(scheduler, 25); this.textContent = '■ 停止';
+  };
+  document.getElementById('seq-block').onclick = function () { var end = performance.now() + 300; while (performance.now() < end) { } };
+
+  // ---- 滤波器 ----
+  var fltNodes = null;
+  document.getElementById('flt-play').onclick = function () {
+    var c = audio();
+    if (fltNodes) { var g = fltNodes.gain; g.gain.setTargetAtTime(0, c.currentTime, 0.05); fltNodes.oscs.forEach(function (o) { o.stop(c.currentTime + 0.3); }); fltNodes = null; this.textContent = '▶ 播放锯齿波和弦'; return; }
+    var filter = new BiquadFilterNode(c, { type: 'lowpass', frequency: +document.getElementById('flt-freq').value, Q: 6 });
+    var pan = new StereoPannerNode(c, { pan: +document.getElementById('flt-pan').value });
+    var gain = new GainNode(c, { gain: 0 }); gain.gain.setTargetAtTime(0.12, c.currentTime, 0.05);
+    var oscs = [48, 55, 60, 64].map(function (n) { var o = new OscillatorNode(c, { type: 'sawtooth', frequency: noteToFreq(n), detune: (Math.random() - 0.5) * 12 }); o.connect(filter); o.start(); return o; });
+    filter.connect(pan).connect(gain).connect(master);
+    fltNodes = { filter: filter, pan: pan, gain: gain, oscs: oscs }; this.textContent = '■ 停止';
+  };
+  document.getElementById('flt-freq').oninput = function () {
+    document.getElementById('flt-freq-v').textContent = this.value;
+    if (fltNodes) fltNodes.filter.frequency.setTargetAtTime(+this.value, ctx.currentTime, 0.02);
+  };
+  document.getElementById('flt-pan').oninput = function () { if (fltNodes) fltNodes.pan.pan.setTargetAtTime(+this.value, ctx.currentTime, 0.02); };
+
+  // ---- 可视化 ----
+  var viz = document.getElementById('viz'), vctx = viz.getContext('2d'), mode = 'freq', micSource = null, micAnalyser = null;
+  function sizeViz() { var d = devicePixelRatio || 1, r = viz.getBoundingClientRect(); viz.width = r.width * d; viz.height = r.height * d; vctx.setTransform(d, 0, 0, d, 0, 0); }
+  new ResizeObserver(sizeViz).observe(viz);
+  document.getElementById('viz-mode').onclick = function () { mode = mode === 'freq' ? 'wave' : 'freq'; };
+  document.getElementById('viz-mic').onclick = async function () {
+    try {
+      var c = audio(), stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micSource = new MediaStreamAudioSourceNode(c, { mediaStream: stream });
+      micAnalyser = new AnalyserNode(c, { fftSize: 2048 });
+      micSource.connect(micAnalyser);   // 只分析，不接到扬声器，避免回授（第 18 章）
+      document.getElementById('viz-info').textContent = '正在显示麦克风输入（不会被播放出来）';
+    } catch (e) { document.getElementById('viz-info').textContent = e.name + ': ' + e.message; }
+  };
+  var bins = new Uint8Array(1024), wave = new Uint8Array(2048);
+  (function draw() {
+    var w = viz.clientWidth, h = viz.clientHeight;
+    vctx.clearRect(0, 0, w, h);
+    var an = micAnalyser || analyser;
+    if (an) {
+      if (mode === 'freq') {
+        an.getByteFrequencyData(bins);
+        var n = 256, bw = w / n;
+        for (var i = 0; i < n; i++) {
+          var v = bins[i] / 255;
+          vctx.fillStyle = 'hsl(' + (20 + i * 0.8) + ', 85%, ' + (45 + v * 20) + '%)';
+          vctx.fillRect(i * bw, h - v * h, Math.max(1, bw - 1), v * h);
+        }
+      } else {
+        an.getByteTimeDomainData(wave);
+        vctx.beginPath(); vctx.strokeStyle = '#6ac48d'; vctx.lineWidth = 2;
+        for (var j = 0; j < wave.length; j++) { var x = j / wave.length * w, y = wave[j] / 255 * h; j ? vctx.lineTo(x, y) : vctx.moveTo(x, y); }
+        vctx.stroke();
+      }
+    } else {
+      vctx.fillStyle = 'rgba(233,226,216,.5)'; vctx.font = '13px system-ui, sans-serif'; vctx.textAlign = 'center';
+      vctx.fillText('还没有声音。先弹一下上面的钢琴吧', w / 2, h / 2);
+    }
+    requestAnimationFrame(draw);
+  })();
+})();
+</script>
+</body>
+</html>

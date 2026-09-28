@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 25 章 · Canvas 2D 绘图 — Web API 实战教程</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .cv { width: 100%; height: 240px; display: block; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); }
+  .cv.short { height: 170px; }
+  .cv-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 600px) { .cv-pair { grid-template-columns: 1fr; } }
+  .cv-pair .cap { font-size: 12px; color: var(--fg-faint); text-align: center; margin-top: 3px; }
+</style>
+</head>
+<body data-chapter="25">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 25 章 · 补充篇</span>
+<h1>Canvas 2D 绘图</h1>
+<p class="lede">
+  第 18 章用 <code>&lt;canvas&gt;</code> 从视频里截了一帧，但没有讲它本身怎么用。Canvas 是浏览器里的一块「画板」：
+  你用 JavaScript 下达「在这里画一条线」「把这块区域填成红色」之类的命令，浏览器把结果变成像素。
+  图表、游戏、图片编辑器、签名板、数据可视化……都建立在它之上。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解 Canvas 的「立即模式」与坐标系，以及在高清屏上不模糊的正确写法</li>
+    <li>绘制矩形、路径、圆弧、文字、渐变和图片</li>
+    <li>用 <code>save / restore</code> 与变换（平移、旋转、缩放）组织复杂图形</li>
+    <li>用 <code>ImageData</code> 逐像素处理图片</li>
+    <li>写一个动画循环，并判断鼠标点中了哪个图形</li>
+    <li>用 OffscreenCanvas 把绘制工作移到 Worker 中</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="intro">Canvas、SVG 与 DOM</h2>
+
+<p>浏览器里有三种画图方式，它们的根本区别在于「画完之后，浏览器还记不记得你画了什么」：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="DOM、SVG 与 Canvas 的对比">
+  <rect class="bx-b" x="20" y="20" width="230" height="210" rx="12"/>
+  <text class="ttl on-b" x="135" y="44" text-anchor="middle">DOM + CSS</text>
+  <text class="sm" x="135" y="66" text-anchor="middle">每个元素都是一个对象</text>
+  <text class="sm" x="135" y="96" text-anchor="middle">✓ 文字排版、无障碍、事件</text>
+  <text class="sm" x="135" y="114" text-anchor="middle">✗ 元素上千后变慢</text>
+  <text class="sm on-b" x="135" y="150" text-anchor="middle">适合：界面、表单、文档</text>
+
+  <rect class="bx-g" x="265" y="20" width="230" height="210" rx="12"/>
+  <text class="ttl on-g" x="380" y="44" text-anchor="middle">SVG（保留模式）</text>
+  <text class="sm" x="380" y="66" text-anchor="middle">图形是 DOM 节点，浏览器记得</text>
+  <text class="sm" x="380" y="96" text-anchor="middle">✓ 矢量，任意缩放不失真</text>
+  <text class="sm" x="380" y="114" text-anchor="middle">✓ 每个图形可以绑定事件、用 CSS</text>
+  <text class="sm" x="380" y="132" text-anchor="middle">✗ 图形数以万计时变慢</text>
+  <text class="sm on-g" x="380" y="168" text-anchor="middle">适合：图标、示意图（本教程的图）、</text>
+  <text class="sm on-g" x="380" y="186" text-anchor="middle">数据量不大的图表</text>
+
+  <rect class="bx-a" x="510" y="20" width="230" height="210" rx="12"/>
+  <text class="ttl on-a" x="625" y="44" text-anchor="middle">Canvas（立即模式）</text>
+  <text class="sm" x="625" y="66" text-anchor="middle">画完就只剩像素，浏览器不记得</text>
+  <text class="sm" x="625" y="96" text-anchor="middle">✓ 画十万个点也很快</text>
+  <text class="sm" x="625" y="114" text-anchor="middle">✓ 可以逐像素读写</text>
+  <text class="sm" x="625" y="132" text-anchor="middle">✗ 要改就得清空重画</text>
+  <text class="sm" x="625" y="150" text-anchor="middle">✗ 点击检测、无障碍要自己做</text>
+  <text class="sm on-a" x="625" y="186" text-anchor="middle">适合：游戏、大数据图表、图片处理</text>
+</svg>
+<figcaption>图 25-1　三种绘图方式：浏览器「记得」的越多，越方便，也越重</figcaption>
+</figure>
+
+<p>
+  「立即模式」是理解 Canvas 的关键：<code>ctx.fillRect(10, 10, 50, 50)</code> 执行完，画布上就多了一块像素，但并没有一个「矩形对象」留下来。
+  想把它挪个位置？只能清空画布，在新位置重新画一遍。所以 Canvas 程序通常自己维护一份「场景数据」，每次变化都根据数据重绘。
+</p>
+
+<h2 id="r25-1"><span class="rn">25.1</span>准备画布：坐标系与高清屏</h2>
+
+<p class="prob">你在页面上放了一个画布，画出来的线条在手机和 Mac 上却是模糊的。</p>
+
+<div class="code" data-lang="html">
+<script type="text/plain">
+<canvas id="chart" style="width: 600px; height: 300px">
+  <!-- 不支持 canvas 或屏幕阅读器看到的替代内容 -->
+  本月销售额柱状图：一月 120，二月 180，三月 90。
+</canvas>
+</script>
+</div>
+
+<p>一个 canvas 有<strong>两个尺寸</strong>：CSS 决定它在页面上显示多大，<code>width</code> / <code>height</code> 属性决定它内部的位图有多少像素（默认 300 × 150）。两者不一致时，位图会被拉伸：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="canvas 位图尺寸与显示尺寸不一致导致模糊">
+  <text class="ttl on-r" x="20" y="24">✗ 位图 300×150，显示为 600×300</text>
+  <g>
+    <rect x="20" y="36" width="120" height="60" style="fill:var(--panel-2);stroke:var(--line-2)"/>
+    <text class="sm" x="80" y="112" text-anchor="middle">位图 300×150</text>
+    <path class="ln" d="M144 66 H196" marker-end="url(#ar)"/>
+    <text class="sm" x="170" y="58" text-anchor="middle">拉伸 4 倍</text>
+    <rect x="200" y="36" width="200" height="100" style="fill:var(--panel-2);stroke:var(--line-2)"/>
+    <path d="M220 116 L260 70 L300 96 L340 56 L380 80" style="fill:none;stroke:var(--red);stroke-width:5;opacity:.45"/>
+    <path d="M220 116 L260 70 L300 96 L340 56 L380 80" style="fill:none;stroke:var(--red);stroke-width:2"/>
+    <text class="sm on-r" x="300" y="152" text-anchor="middle">线条发虚、文字模糊</text>
+  </g>
+  <text class="ttl on-g" x="440" y="24">✓ 位图 = 显示尺寸 × devicePixelRatio</text>
+  <rect x="440" y="36" width="200" height="100" style="fill:var(--panel-2);stroke:var(--line-2)"/>
+  <path d="M460 116 L500 70 L540 96 L580 56 L620 80" style="fill:none;stroke:var(--green);stroke-width:2"/>
+  <text class="sm on-g" x="540" y="152" text-anchor="middle">一个位图像素对应一个物理像素，清晰</text>
+  <text class="sm" x="380" y="190" text-anchor="middle">坐标系：原点在左上角，x 向右增大，y 向下增大（和数学课上的 y 轴方向相反）</text>
+  <text class="sm" x="380" y="210" text-anchor="middle">再调用 ctx.scale(dpr, dpr)，之后的绘图代码就可以继续用 CSS 像素思考，不必关心屏幕倍率</text>
+</svg>
+<figcaption>图 25-2　高清屏上，canvas 的位图必须按 devicePixelRatio 放大</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+function setupCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const { width, height } = canvas.getBoundingClientRect();   // CSS 显示尺寸
+
+  // 位图尺寸 = 显示尺寸 × 倍率（注意：修改 width/height 会清空画布，并重置所有绘图状态）
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);    // 之后用 CSS 像素坐标绘图即可
+  return { ctx, width, height };
+}
+
+const { ctx, width, height } = setupCanvas(document.querySelector('#chart'));
+// 窗口大小变化时（或用第 6 章的 ResizeObserver）重新调用并重绘
+</script>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 回顾第 18 章</div>
+  <p>
+    第 18 章原书的拍照代码写的是 <code>canvas.width = canvas.width * devicePixelRatio</code>，每拍一张画布就翻倍变大 —— 问题就出在没有区分这两个尺寸。
+    正确的做法永远是「从显示尺寸（或视频的真实分辨率）出发计算」，而不是在当前位图尺寸上累乘。
+  </p>
+</div>
+
+<h2 id="r25-2"><span class="rn">25.2</span>画基本图形</h2>
+
+<p class="prob">你要画一个简单的图表：几个矩形、一条折线、一些圆点和文字标签。</p>
+
+<p>最简单的是矩形，三个方法各司其职：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+ctx.fillStyle = '#d95602';
+ctx.fillRect(20, 20, 120, 80);        // 填充矩形：x, y, 宽, 高
+
+ctx.strokeStyle = '#2b6cb0';
+ctx.lineWidth = 3;
+ctx.strokeRect(160, 20, 120, 80);     // 描边矩形
+
+ctx.clearRect(40, 40, 30, 30);        // 擦除一块区域（变回透明）
+</script>
+</div>
+
+<h3>路径：一切复杂图形的基础</h3>
+
+<p>其他形状都用<strong>路径</strong>画：先像拿着笔在纸上「比划」出轮廓，最后决定是描边还是填充。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="用路径命令画一个三角形的步骤">
+  <g>
+    <rect class="bx" x="20" y="20" width="130" height="130" rx="6" style="fill:var(--panel-2)"/>
+    <text class="mono" x="85" y="170" text-anchor="middle" style="font-size:11px">beginPath()</text>
+    <text class="mono" x="85" y="186" text-anchor="middle" style="font-size:11px">moveTo(40, 120)</text>
+    <circle cx="40" cy="130" r="4" style="fill:var(--accent)"/>
+  </g>
+  <g>
+    <rect class="bx" x="170" y="20" width="130" height="130" rx="6" style="fill:var(--panel-2)"/>
+    <path d="M190 130 L235 40 L280 130" style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4"/>
+    <text class="mono" x="235" y="170" text-anchor="middle" style="font-size:11px">lineTo(85, 30)</text>
+    <text class="mono" x="235" y="186" text-anchor="middle" style="font-size:11px">lineTo(130, 120)</text>
+  </g>
+  <g>
+    <rect class="bx" x="320" y="20" width="130" height="130" rx="6" style="fill:var(--panel-2)"/>
+    <path d="M340 130 L385 40 L430 130 Z" style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 4"/>
+    <text class="mono" x="385" y="170" text-anchor="middle" style="font-size:11px">closePath()</text>
+    <text class="sm" x="385" y="186" text-anchor="middle">还是「隐形」的轮廓</text>
+  </g>
+  <g>
+    <rect class="bx" x="470" y="20" width="130" height="130" rx="6" style="fill:var(--panel-2)"/>
+    <path d="M490 130 L535 40 L580 130 Z" style="fill:none;stroke:var(--accent);stroke-width:3"/>
+    <text class="mono" x="535" y="170" text-anchor="middle" style="font-size:11px">stroke()</text>
+    <text class="sm" x="535" y="186" text-anchor="middle">描边</text>
+  </g>
+  <g>
+    <rect class="bx" x="620" y="20" width="120" height="130" rx="6" style="fill:var(--panel-2)"/>
+    <path d="M637 130 L680 40 L723 130 Z" style="fill:var(--accent);stroke:none"/>
+    <text class="mono" x="680" y="170" text-anchor="middle" style="font-size:11px">fill()</text>
+    <text class="sm" x="680" y="186" text-anchor="middle">填充</text>
+  </g>
+</svg>
+<figcaption>图 25-3　beginPath → 描出轮廓 → stroke / fill</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 折线
+ctx.beginPath();                    // 开始一条新路径（非常重要，见下方提示）
+ctx.moveTo(20, 150);                // 把笔移到起点，不画线
+ctx.lineTo(80, 90);
+ctx.lineTo(140, 120);
+ctx.lineTo(200, 60);
+ctx.strokeStyle = '#2f7d51';
+ctx.lineWidth = 2;
+ctx.lineJoin = 'round';             // 折角圆滑
+ctx.stroke();
+
+// 圆：arc(圆心 x, 圆心 y, 半径, 起始角, 结束角) —— 角度单位是弧度，一整圈是 2π
+ctx.beginPath();
+ctx.arc(260, 100, 30, 0, Math.PI * 2);
+ctx.fill();
+
+// 圆角矩形（Baseline 2023）
+ctx.beginPath();
+ctx.roundRect(320, 60, 120, 80, 12);
+ctx.stroke();
+
+// 文字
+ctx.font = '600 16px system-ui, sans-serif';
+ctx.textAlign = 'center';           // 以 x 为中心对齐
+ctx.textBaseline = 'middle';        // 以 y 为垂直中线
+ctx.fillText('销售额', 380, 170);
+ctx.measureText('销售额').width;     // 测量文字宽度，用于排版
+</script>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 忘记 beginPath 的经典 bug</div>
+  <p>
+    不调用 <code>beginPath()</code>，新画的线会被加进<strong>上一条</strong>路径。于是每次 <code>stroke()</code> 都会把之前的所有线条再画一遍，
+    颜色越来越深、越来越慢，改了 <code>strokeStyle</code> 旧线条也跟着变色。每画一个独立的图形之前，都先 <code>beginPath()</code>。
+  </p>
+</div>
+
+<h3>颜色、渐变与阴影</h3>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+// 线性渐变：从 (0,0) 到 (0,200)
+const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+gradient.addColorStop(0, '#ff8f4d');
+gradient.addColorStop(1, '#d95602');
+ctx.fillStyle = gradient;             // fillStyle 可以是颜色字符串、渐变或图案
+
+// 还有 createRadialGradient（径向）和 createConicGradient（锥形，适合画色环、饼图，Baseline 2023）
+
+ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
+ctx.shadowBlur = 12;
+ctx.shadowOffsetY = 4;
+
+ctx.globalAlpha = 0.5;                // 之后画的一切都半透明
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：用本节的 API 画出的小图表（已按 devicePixelRatio 适配）</div>
+  <div class="b">
+    <canvas class="cv" id="cv-shapes"></canvas>
+    <p class="hint">改变窗口宽度，ResizeObserver 会触发重新计算尺寸并重绘。</p>
+  </div>
+</div>
+
+<h2 id="r25-3"><span class="rn">25.3</span>状态栈与变换</h2>
+
+<p class="prob">你要画一个时钟：12 个刻度均匀分布在圆周上，指针绕中心旋转。一个个计算坐标太痛苦了。</p>
+
+<p>
+  与其计算每个点的坐标，不如<strong>移动和旋转坐标系本身</strong>。<code>translate</code>、<code>rotate</code>、<code>scale</code> 改变的是「之后所有绘图」所在的坐标系：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="先平移再旋转坐标系">
+  <g>
+    <rect x="20" y="20" width="220" height="180" style="fill:var(--panel-2);stroke:var(--line-2)"/>
+    <path class="ln-b" d="M20 20 H90" marker-end="url(#ar-b)"/><path class="ln-b" d="M20 20 V80" marker-end="url(#ar-b)"/>
+    <text class="sm on-b" x="30" y="38">原点</text>
+    <text class="mono" x="130" y="220" text-anchor="middle" style="font-size:11px">① 默认坐标系</text>
+  </g>
+  <g>
+    <rect x="270" y="20" width="220" height="180" style="fill:var(--panel-2);stroke:var(--line-2)"/>
+    <path class="ln-d" d="M270 20 L380 110"/>
+    <path class="ln-g" d="M380 110 H450" marker-end="url(#ar-g)"/><path class="ln-g" d="M380 110 V170" marker-end="url(#ar-g)"/>
+    <circle cx="380" cy="110" r="4" style="fill:var(--green)"/>
+    <text class="mono" x="380" y="220" text-anchor="middle" style="font-size:11px">② translate(110, 90)</text>
+    <text class="sm on-g" x="390" y="102">新原点 = 表盘中心</text>
+  </g>
+  <g>
+    <rect x="520" y="20" width="220" height="180" style="fill:var(--panel-2);stroke:var(--line-2)"/>
+    <path class="ln-a" d="M630 110 L680 160" marker-end="url(#ar-a)"/><path class="ln-a" d="M630 110 L585 155" marker-end="url(#ar-a)"/>
+    <circle cx="630" cy="110" r="4" style="fill:var(--accent)"/>
+    <rect x="626" y="52" width="8" height="46" transform="rotate(45 630 110)" style="fill:var(--accent)"/>
+    <text class="mono" x="630" y="220" text-anchor="middle" style="font-size:11px">③ rotate(π / 4)</text>
+    <text class="sm on-a" x="644" y="72">照常「竖直向上」</text>
+    <text class="sm on-a" x="644" y="88">画指针，结果自动</text>
+    <text class="sm on-a" x="644" y="104">转过了 45°</text>
+  </g>
+</svg>
+<figcaption>图 25-4　变换改的是坐标系：先平移到中心，再旋转，然后照常画</figcaption>
+</figure>
+
+<p>
+  变换会一直生效，并且会<strong>累积</strong>。所以要配合 <code>save()</code> 和 <code>restore()</code> 使用：
+  <code>save()</code> 把当前的全部绘图状态（变换、颜色、线宽、字体、透明度、裁剪区域……）压入一个栈，<code>restore()</code> 弹出并恢复。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="save 与 restore 的状态栈">
+  <rect class="bx-d" x="20" y="30" width="160" height="140" rx="8"/>
+  <text class="sm" x="100" y="22" text-anchor="middle">状态栈</text>
+  <rect class="bx" x="36" y="126" width="128" height="30" rx="5"/><text class="sm" x="100" y="146" text-anchor="middle">默认状态</text>
+  <rect class="bx-b" x="36" y="90" width="128" height="30" rx="5"/><text class="sm on-b" x="100" y="110" text-anchor="middle">translate 到中心</text>
+  <rect class="bx-a" x="36" y="54" width="128" height="30" rx="5" style="stroke-dasharray:4 3"/><text class="sm on-a" x="100" y="74" text-anchor="middle">+ rotate(第 i 格)</text>
+  <g class="mono" style="font-size:11.5px">
+    <text x="220" y="48">ctx.save();                   // ① 保存默认状态</text>
+    <text x="220" y="70">ctx.translate(cx, cy);</text>
+    <text x="220" y="92">for (let i = 0; i &lt; 12; i++) {</text>
+    <text x="220" y="114">  ctx.save();                 // ② 保存「已平移」的状态</text>
+    <text x="220" y="136">  ctx.rotate(i * Math.PI / 6); ctx.fillRect(…);</text>
+    <text x="220" y="158">  ctx.restore();              // 回到「已平移、未旋转」</text>
+    <text x="220" y="180">}  ctx.restore();             // ③ 回到默认状态</text>
+  </g>
+</svg>
+<figcaption>图 25-5　save / restore 像一个撤销栈：每次临时改动都包在一对 save / restore 里</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+function drawClock(ctx, cx, cy, radius, date) {
+  ctx.save();
+  ctx.translate(cx, cy);                       // 原点移到表盘中心
+
+  for (let i = 0; i < 12; i++) {               // 12 个刻度
+    ctx.save();
+    ctx.rotate(i * Math.PI / 6);               // 每格 30°
+    ctx.fillRect(-2, -radius, 4, 12);          // 永远画在「正上方」
+    ctx.restore();
+  }
+
+  const seconds = date.getSeconds() + date.getMilliseconds() / 1000;
+  ctx.rotate(seconds * Math.PI / 30);          // 秒针：每秒 6°
+  ctx.fillRect(-1, -radius + 16, 2, radius - 10);
+  ctx.restore();
+}
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：用变换画的时钟（每一帧都在重绘）</div>
+  <div class="b"><canvas class="cv short" id="cv-clock"></canvas></div>
+</div>
+
+<h2 id="r25-4"><span class="rn">25.4</span>绘制图片与逐像素处理</h2>
+
+<p class="prob">你想做一个简单的图片编辑器：裁剪、缩放，并实现灰度、反色等滤镜。</p>
+
+<h3>drawImage 的三种写法</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="drawImage 九个参数的含义">
+  <rect x="20" y="30" width="260" height="160" style="fill:var(--blue-bg);stroke:var(--blue)"/>
+  <text class="sm on-b" x="30" y="24">源图片（image / video / canvas / ImageBitmap）</text>
+  <rect x="90" y="70" width="120" height="80" style="fill:none;stroke:var(--accent);stroke-width:2.5;stroke-dasharray:6 4"/>
+  <text class="mono on-a" x="150" y="64" text-anchor="middle" style="font-size:11px">sx, sy</text>
+  <text class="mono on-a" x="150" y="166" text-anchor="middle" style="font-size:11px">sw × sh</text>
+  <path class="ln-a" d="M212 110 H466" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="340" y="102" text-anchor="middle">截取这一块，缩放后画到目标区域</text>
+  <rect x="470" y="30" width="270" height="160" style="fill:var(--panel-2);stroke:var(--line-2)"/>
+  <text class="sm" x="480" y="24">画布</text>
+  <rect x="520" y="70" width="180" height="100" style="fill:var(--accent-bg);stroke:var(--accent);stroke-width:2"/>
+  <text class="mono on-a" x="610" y="64" text-anchor="middle" style="font-size:11px">dx, dy</text>
+  <text class="mono on-a" x="610" y="124" text-anchor="middle" style="font-size:11px">dw × dh</text>
+  <text class="mono" x="380" y="206" text-anchor="middle" style="font-size:11px">drawImage(img, dx, dy) · drawImage(img, dx, dy, dw, dh) · drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh)</text>
+</svg>
+<figcaption>图 25-6　九参数版本：先从源图裁一块（s = source），再放到画布上（d = destination）</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const img = new Image();
+img.src = 'photo.jpg';
+await img.decode();                             // 第 1 章：等图片解码完成
+
+ctx.drawImage(img, 0, 0);                       // 原尺寸画在左上角
+ctx.drawImage(img, 0, 0, 200, 150);             // 缩放到 200×150
+ctx.drawImage(img, 100, 50, 300, 300,           // 从源图 (100,50) 裁出 300×300 的正方形
+                   0, 0, 150, 150);             // 画成 150×150 的头像
+
+// 用户选择的文件（第 10 章），用 createImageBitmap 解码更快，也能在 Worker 中使用
+const bitmap = await createImageBitmap(file);
+ctx.drawImage(bitmap, 0, 0);
+</script>
+</div>
+
+<h3>ImageData：直接读写像素</h3>
+
+<p><code>getImageData</code> 把一块区域的像素读成一个巨大的一维数组，每个像素占 4 个元素：红、绿、蓝、透明度，各 0–255：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="ImageData.data 的内存布局">
+  <text class="mono" x="20" y="28" style="font-size:12px">imageData.data（Uint8ClampedArray）</text>
+  <g class="mono" style="font-size:12px">
+    <rect x="20" y="40" width="44" height="34" style="fill:#fdecea;stroke:#c0392b"/><text x="42" y="62" text-anchor="middle" style="fill:#c0392b">R</text>
+    <rect x="64" y="40" width="44" height="34" style="fill:#eaf5ee;stroke:#2f7d51"/><text x="86" y="62" text-anchor="middle" style="fill:#2f7d51">G</text>
+    <rect x="108" y="40" width="44" height="34" style="fill:#eaf1f9;stroke:#2b6cb0"/><text x="130" y="62" text-anchor="middle" style="fill:#2b6cb0">B</text>
+    <rect x="152" y="40" width="44" height="34" style="fill:#f4f2ee;stroke:#8c8377"/><text x="174" y="62" text-anchor="middle" style="fill:#5f584f">A</text>
+    <rect x="196" y="40" width="44" height="34" style="fill:#fdecea;stroke:#c0392b"/><text x="218" y="62" text-anchor="middle" style="fill:#c0392b">R</text>
+    <rect x="240" y="40" width="44" height="34" style="fill:#eaf5ee;stroke:#2f7d51"/><text x="262" y="62" text-anchor="middle" style="fill:#2f7d51">G</text>
+    <rect x="284" y="40" width="44" height="34" style="fill:#eaf1f9;stroke:#2b6cb0"/><text x="306" y="62" text-anchor="middle" style="fill:#2b6cb0">B</text>
+    <rect x="328" y="40" width="44" height="34" style="fill:#f4f2ee;stroke:#8c8377"/><text x="350" y="62" text-anchor="middle" style="fill:#5f584f">A</text>
+    <text x="390" y="62">……</text>
+  </g>
+  <path class="ln-d" d="M20 84 H196"/><text class="sm" x="108" y="100" text-anchor="middle">像素 (0, 0)</text>
+  <path class="ln-d" d="M196 84 H372"/><text class="sm" x="284" y="100" text-anchor="middle">像素 (1, 0)</text>
+  <text class="mono on-a" x="470" y="50" style="font-size:12px">像素 (x, y) 的起始下标</text>
+  <text class="mono on-a" x="470" y="72" style="font-size:12px">i = (y × width + x) × 4</text>
+  <text class="sm" x="20" y="134">一张 1000×1000 的图片有 400 万个元素。按行从左到右、从上到下排列，读取整块后在 JS 中循环处理，最后 putImageData 写回</text>
+  <text class="sm" x="20" y="154">（跨域加载且没有 CORS 授权的图片会「污染」画布，此后 getImageData 和 toBlob 都会抛出安全错误）</text>
+</svg>
+<figcaption>图 25-7　每个像素 4 个字节：R、G、B、A</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+function grayscale(ctx, width, height) {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    // 人眼对绿色最敏感，所以按亮度加权，而不是简单地求平均
+    const luminance = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    data[i] = data[i + 1] = data[i + 2] = luminance;   // 透明度 data[i + 3] 不变
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// 需要频繁读取像素时，创建上下文时声明一下，浏览器会改用更适合读取的存储方式
+const ctx2 = canvas.getContext('2d', { willReadFrequently: true });
+</script>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 简单滤镜不必逐像素：ctx.filter</div>
+  <p>
+    第 18 章提过，<code>ctx.filter = 'grayscale(1) blur(2px)'</code> 支持所有 CSS 滤镜函数，由浏览器（通常借助 GPU）处理，比 JS 循环快得多。<span class="bl newly">Baseline 2024</span>
+    逐像素处理留给 CSS 滤镜做不到的效果：阈值化、马赛克、自定义颜色映射、图像分析（统计颜色、找边缘）等。
+  </p>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：逐像素滤镜（可以换成你自己的图片，完全在本地处理）</div>
+  <div class="b">
+    <div class="row">
+      <input type="file" id="px-file" accept="image/*">
+      <button data-px="reset">原图</button>
+      <button data-px="gray">灰度</button>
+      <button data-px="invert">反色</button>
+      <button data-px="threshold">阈值（黑白）</button>
+      <button data-px="mosaic">马赛克</button>
+    </div>
+    <canvas class="cv" id="cv-pixels"></canvas>
+    <div class="out" id="px-out" style="min-height:0"></div>
+  </div>
+</div>
+
+<h2 id="r25-5"><span class="rn">25.5</span>动画循环与点击检测</h2>
+
+<p class="prob">你要做一个小游戏或交互图表：几十个会动的圆，用户点中某个圆时让它变色。</p>
+
+<p>Canvas 动画的骨架永远是同一个循环（第 1 章的 <code>requestAnimationFrame</code>）：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="Canvas 动画循环：更新数据、清空、绘制">
+  <rect class="bx-b" x="40" y="60" width="160" height="60" rx="10"/>
+  <text class="ttl on-b" x="120" y="84" text-anchor="middle">① 更新数据</text>
+  <text class="sm" x="120" y="104" text-anchor="middle">位置 += 速度 × 时间</text>
+  <path class="ln" d="M202 90 H266" marker-end="url(#ar)"/>
+  <rect class="bx-r" x="270" y="60" width="160" height="60" rx="10"/>
+  <text class="ttl on-r" x="350" y="84" text-anchor="middle">② 清空画布</text>
+  <text class="mono" x="350" y="104" text-anchor="middle" style="font-size:11px">clearRect(…)</text>
+  <path class="ln" d="M432 90 H496" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="500" y="60" width="160" height="60" rx="10"/>
+  <text class="ttl on-g" x="580" y="84" text-anchor="middle">③ 根据数据绘制</text>
+  <text class="sm" x="580" y="104" text-anchor="middle">画出每个对象</text>
+  <path class="ln-a" d="M580 122 V150 H120 V124" marker-end="url(#ar-a)"/>
+  <text class="mono on-a" x="350" y="168" text-anchor="middle" style="font-size:11px">requestAnimationFrame(loop)</text>
+  <text class="sm" x="380" y="30" text-anchor="middle">「数据」是唯一的真相，画布只是它此刻的样子</text>
+</svg>
+<figcaption>图 25-8　更新 → 清空 → 绘制，每帧一次</figcaption>
+</figure>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+const balls = Array.from({ length: 30 }, () => ({
+  x: Math.random() * width, y: Math.random() * height,
+  vx: (Math.random() - 0.5) * 200, vy: (Math.random() - 0.5) * 200,   // 像素 / 秒
+  r: 8 + Math.random() * 12, hit: false
+}));
+
+let last = performance.now();
+function loop(now) {
+  const dt = (now - last) / 1000;   // 距上一帧的秒数：让速度与帧率无关（第 1 章）
+  last = now;
+
+  for (const b of balls) {           // ① 更新
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.x < b.r || b.x > width - b.r) b.vx *= -1;    // 碰到左右边界反弹
+    if (b.y < b.r || b.y > height - b.r) b.vy *= -1;
+  }
+
+  ctx.clearRect(0, 0, width, height); // ② 清空
+  for (const b of balls) {           // ③ 绘制
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = b.hit ? '#2f7d51' : '#d95602';
+    ctx.fill();
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</div>
+
+<h3>点中了谁？</h3>
+
+<p>画布上没有「圆形元素」可以绑定 click 事件，只能监听整个画布，再用坐标自己判断：</p>
+
+<div class="code" data-lang="js">
+<script type="text/plain">
+canvas.addEventListener('pointerdown', event => {   // 第 20 章的 Pointer Events
+  // offsetX / offsetY 是相对画布左上角的 CSS 像素，正好和我们的绘图坐标一致
+  const x = event.offsetX, y = event.offsetY;
+
+  // 从最上层（最后画的）往下找
+  for (let i = balls.length - 1; i >= 0; i--) {
+    const b = balls[i];
+    if (Math.hypot(x - b.x, y - b.y) <= b.r) {    // 圆：到圆心的距离 ≤ 半径
+      b.hit = !b.hit;
+      break;
+    }
+  }
+});
+
+// 不规则形状：用 Path2D 保存路径，再用 isPointInPath 判断
+const star = new Path2D('M10 0 L13 7 L20 7 L14 12 L16 20 L10 15 L4 20 L6 12 L0 7 L7 7 Z');
+ctx.isPointInPath(star, x, y);   // 注意：这里的坐标要用位图像素，即乘以 devicePixelRatio
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：点击小球切换颜色</div>
+  <div class="b">
+    <canvas class="cv" id="cv-balls"></canvas>
+    <div class="row"><button id="balls-toggle">暂停</button><span class="hint" id="balls-info"></span></div>
+  </div>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 别忘了无障碍</div>
+  <p>
+    屏幕阅读器「看不见」画布里的内容。至少要在 <code>&lt;canvas&gt;</code> 标签内部写上等价的文字描述（如本章开头的例子），
+    或者用 <code>role="img"</code> 加 <code>aria-label</code>。交互式的 Canvas 应用（图表、编辑器）最好在旁边提供一份等价的 HTML 表格或键盘操作方式。
+  </p>
+</div>
+
+<h2 id="r25-6"><span class="rn">25.6</span>OffscreenCanvas：在 Worker 中绘图</h2>
+
+<p class="prob">你的页面既有复杂的 Canvas 动画，又有大量主线程工作（解析数据、操作 DOM），动画时不时就卡一下。</p>
+
+<p>
+  第 21 章讲过：主线程一忙，一切都会停。<strong>OffscreenCanvas</strong> 把画布的控制权转移给 Worker，绘制工作完全在后台线程进行，
+  即使主线程被堵住几秒钟，动画依然流畅。<span class="bl newly">Baseline 2023</span>
+</p>
+
+<div class="code" data-lang="js" data-file="页面">
+<script type="text/plain">
+const canvas = document.querySelector('#worker-canvas');
+const offscreen = canvas.transferControlToOffscreen();   // 之后页面不能再对这个 canvas 调用 getContext
+
+const worker = new Worker('demo/worker/offscreen.js');
+worker.postMessage({ canvas: offscreen, dpr: devicePixelRatio }, [offscreen]);   // 第 21 章：可转移对象
+</script>
+</div>
+
+<div class="code" data-lang="js" data-file="demo/worker/offscreen.js（节选）">
+<script type="text/plain">
+self.onmessage = ({ data }) => {
+  const ctx = data.canvas.getContext('2d');   // 和普通 canvas 的 API 完全一样
+  function draw() {
+    // …清空、绘制…
+    requestAnimationFrame(draw);              // Worker 中同样有 rAF
+  }
+  requestAnimationFrame(draw);
+};
+</script>
+</div>
+
+<div class="demo">
+  <div class="h">试一试：阻塞主线程 2 秒，比较两个动画</div>
+  <div class="b">
+    <div class="cv-pair">
+      <div><canvas class="cv short" id="cv-main"></canvas><div class="cap">主线程绘制</div></div>
+      <div><canvas class="cv short" id="cv-worker"></canvas><div class="cap">Worker 中的 OffscreenCanvas</div></div>
+    </div>
+    <div class="row"><button id="block-btn">阻塞主线程 2 秒</button><span class="hint" id="oc-info"></span></div>
+  </div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 更进一步：WebGL 与 WebGPU</div>
+  <p>
+    Canvas 2D 由 CPU 或 GPU 绘制，但 API 本身是「一个命令画一个东西」。需要绘制几十万个粒子、做 3D 场景或图像的实时处理时，
+    可以在同一个 <code>&lt;canvas&gt;</code> 上改用 <code>getContext('webgl2')</code> 或 <code>getContext('webgpu')</code>，直接给 GPU 编程。
+    这通常借助 Three.js、PixiJS 等库完成。
+  </p>
+</div>
+
+<h2 id="summary">小结</h2>
+
+<ul>
+  <li>Canvas 是立即模式：画完只剩像素，程序自己维护数据，变化时清空重画。</li>
+  <li>位图尺寸（<code>width/height</code> 属性）要等于显示尺寸 × <code>devicePixelRatio</code>，再 <code>ctx.scale(dpr, dpr)</code>。</li>
+  <li>路径：<code>beginPath → moveTo / lineTo / arc / roundRect → stroke / fill</code>；别忘了 <code>beginPath</code>。</li>
+  <li>用 <code>translate / rotate / scale</code> 变换坐标系，用 <code>save / restore</code> 管理状态。</li>
+  <li><code>drawImage</code> 可裁剪和缩放；<code>getImageData / putImageData</code> 逐像素处理；简单滤镜用 <code>ctx.filter</code>。</li>
+  <li>动画 = 更新 → 清空 → 绘制；点击检测靠自己计算或 <code>isPointInPath</code>；OffscreenCanvas 让绘制离开主线程。</li>
+</ul>
+
+<div class="exercise">
+  <h3>动手练习</h3>
+  <ol>
+    <li>做一个柱状图组件：传入数据数组，自动计算坐标轴刻度，鼠标悬停在柱子上时显示数值（用第 13 章的 popover）。</li>
+    <li>做一个签名板：用第 20 章的 Pointer Events 记录笔迹，支持压感粗细，「保存」时用 <code>toBlob</code> 导出 PNG 并下载（第 10 章）。</li>
+    <li>给本章的像素滤镜加上「亮度 / 对比度」滑块，并把处理代码移到 Worker 中（第 21 章，用可转移对象传递 <code>ImageData.data.buffer</code>）。</li>
+    <li>做一个「贪吃蛇」小游戏：用固定时间步长更新游戏逻辑，用 rAF 绘制，用第 20 章的键盘事件控制方向。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+</main>
+</div>
+<script src="assets/site.js"></script>
+<script>
+(function () {
+  function css(name) { return getComputedStyle(document.body).getPropertyValue(name).trim() || '#888'; }
+  function setup(canvas) {
+    var dpr = window.devicePixelRatio || 1, r = canvas.getBoundingClientRect();
+    canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr);
+    var ctx = canvas.getContext('2d', canvas.id === 'cv-pixels' ? { willReadFrequently: true } : undefined);
+    ctx.scale(dpr, dpr);
+    return { ctx: ctx, w: r.width, h: r.height, dpr: dpr };
+  }
+
+  // ---- 25.2 基本图形 ----
+  var shapes = document.getElementById('cv-shapes');
+  function drawShapes() {
+    var s = setup(shapes), ctx = s.ctx, w = s.w, h = s.h;
+    var data = [120, 180, 90, 150, 210], labels = ['一月', '二月', '三月', '四月', '五月'];
+    var pad = 36, bw = (w - pad * 2) / data.length, max = 240;
+    ctx.strokeStyle = css('--line-2'); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad, 16); ctx.lineTo(pad, h - 34); ctx.lineTo(w - 16, h - 34); ctx.stroke();
+    var grad = ctx.createLinearGradient(0, 16, 0, h - 34);
+    grad.addColorStop(0, css('--accent-2')); grad.addColorStop(1, css('--accent'));
+    ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    var pts = [];
+    data.forEach(function (v, i) {
+      var bh = (h - 60) * v / max, x = pad + i * bw + bw * 0.2, y = h - 34 - bh;
+      ctx.fillStyle = grad; ctx.beginPath(); ctx.roundRect(x, y, bw * 0.6, bh, [6, 6, 0, 0]); ctx.fill();
+      ctx.fillStyle = css('--fg-soft'); ctx.fillText(labels[i], x + bw * 0.3, h - 18);
+      ctx.fillText(v, x + bw * 0.3, y - 10);
+      pts.push([x + bw * 0.3, y]);
+    });
+    ctx.beginPath(); ctx.strokeStyle = css('--blue'); ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    pts.forEach(function (p, i) { i ? ctx.lineTo(p[0], p[1] - 22) : ctx.moveTo(p[0], p[1] - 22); }); ctx.stroke();
+    pts.forEach(function (p) { ctx.beginPath(); ctx.arc(p[0], p[1] - 22, 4, 0, Math.PI * 2); ctx.fillStyle = css('--blue'); ctx.fill(); });
+  }
+  new ResizeObserver(drawShapes).observe(shapes);
+
+  // ---- 25.3 时钟 ----
+  var clock = document.getElementById('cv-clock'), cs = setup(clock);
+  new ResizeObserver(function () { cs = setup(clock); }).observe(clock);
+  (function tick() {
+    var ctx = cs.ctx, cx = cs.w / 2, cy = cs.h / 2, R = Math.min(cs.w, cs.h) / 2 - 12, d = new Date();
+    ctx.clearRect(0, 0, cs.w, cs.h);
+    ctx.save(); ctx.translate(cx, cy);
+    ctx.fillStyle = css('--fg-soft');
+    for (var i = 0; i < 60; i++) { ctx.save(); ctx.rotate(i * Math.PI / 30); ctx.fillRect(-1, -R, i % 5 ? 2 : 4, i % 5 ? 6 : 12); ctx.restore(); }
+    function hand(angle, len, width, color) { ctx.save(); ctx.rotate(angle); ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(-width / 2, -len, width, len + 8, width / 2); ctx.fill(); ctx.restore(); }
+    var s = d.getSeconds() + d.getMilliseconds() / 1000, m = d.getMinutes() + s / 60, hr = (d.getHours() % 12) + m / 60;
+    hand(hr * Math.PI / 6, R * 0.5, 5, css('--fg'));
+    hand(m * Math.PI / 30, R * 0.75, 3, css('--fg'));
+    hand(s * Math.PI / 30, R * 0.85, 1.5, css('--accent'));
+    ctx.restore();
+    requestAnimationFrame(tick);
+  })();
+
+  // ---- 25.4 像素 ----
+  var pc = document.getElementById('cv-pixels'), ps = setup(pc), pout = document.getElementById('px-out'), source = null;
+  function drawSource() {
+    var ctx = ps.ctx;
+    ctx.clearRect(0, 0, ps.w, ps.h);
+    if (source) {
+      var sc = Math.min(ps.w / source.width, ps.h / source.height), dw = source.width * sc, dh = source.height * sc;
+      ctx.drawImage(source, (ps.w - dw) / 2, (ps.h - dh) / 2, dw, dh);
+    } else {
+      var g = ctx.createConicGradient ? ctx.createConicGradient(0, ps.w / 2, ps.h / 2) : ctx.createLinearGradient(0, 0, ps.w, 0);
+      ['#ff5e57', '#ffd32a', '#0be881', '#0fbcf9', '#a55eea', '#ff5e57'].forEach(function (c, i) { g.addColorStop(i / 5, c); });
+      ctx.fillStyle = g; ctx.fillRect(0, 0, ps.w, ps.h);
+      ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.font = '700 28px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('Canvas 像素', ps.w / 2, ps.h / 2);
+    }
+  }
+  drawSource();
+  document.getElementById('px-file').addEventListener('change', async function (e) {
+    var f = e.target.files[0]; if (!f) return;
+    source = await createImageBitmap(f); drawSource();
+  });
+  document.querySelectorAll('[data-px]').forEach(function (b) {
+    b.onclick = function () {
+      drawSource();
+      var mode = b.dataset.px; if (mode === 'reset') { pout.textContent = ''; return; }
+      var ctx = ps.ctx, W = pc.width, H = pc.height, t0 = performance.now();
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);          // 按位图像素处理
+      var img = ctx.getImageData(0, 0, W, H), d = img.data;
+      if (mode === 'mosaic') {
+        var size = Math.round(12 * ps.dpr);
+        for (var y = 0; y < H; y += size) for (var x = 0; x < W; x += size) {
+          var i = (y * W + x) * 4, r = d[i], g = d[i + 1], bl = d[i + 2];
+          for (var yy = y; yy < Math.min(y + size, H); yy++) for (var xx = x; xx < Math.min(x + size, W); xx++) {
+            var j = (yy * W + xx) * 4; d[j] = r; d[j + 1] = g; d[j + 2] = bl;
+          }
+        }
+      } else {
+        for (var k = 0; k < d.length; k += 4) {
+          var lum = 0.299 * d[k] + 0.587 * d[k + 1] + 0.114 * d[k + 2];
+          if (mode === 'gray') { d[k] = d[k + 1] = d[k + 2] = lum; }
+          else if (mode === 'invert') { d[k] = 255 - d[k]; d[k + 1] = 255 - d[k + 1]; d[k + 2] = 255 - d[k + 2]; }
+          else if (mode === 'threshold') { d[k] = d[k + 1] = d[k + 2] = lum > 128 ? 255 : 0; }
+        }
+      }
+      ctx.putImageData(img, 0, 0); ctx.restore();
+      pout.textContent = mode + '：处理了 ' + (W * H).toLocaleString() + ' 个像素（' + d.length.toLocaleString() + ' 个数组元素），用时 ' + (performance.now() - t0).toFixed(1) + 'ms';
+    };
+  });
+
+  // ---- 25.5 小球 ----
+  var bc = document.getElementById('cv-balls'), bs = setup(bc), running = true, info = document.getElementById('balls-info');
+  new ResizeObserver(function () { bs = setup(bc); }).observe(bc);
+  var balls = Array.from({ length: 24 }, function () {
+    return { x: 30 + Math.random() * (bs.w - 60), y: 30 + Math.random() * (bs.h - 60), vx: (Math.random() - 0.5) * 220, vy: (Math.random() - 0.5) * 220, r: 10 + Math.random() * 14, hit: false };
+  });
+  var last = performance.now();
+  (function loop(now) {
+    var dt = Math.min((now - last) / 1000, 0.05); last = now;
+    if (running) balls.forEach(function (b) {
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      if (b.x < b.r) { b.x = b.r; b.vx *= -1; } if (b.x > bs.w - b.r) { b.x = bs.w - b.r; b.vx *= -1; }
+      if (b.y < b.r) { b.y = b.r; b.vy *= -1; } if (b.y > bs.h - b.r) { b.y = bs.h - b.r; b.vy *= -1; }
+    });
+    var ctx = bs.ctx; ctx.clearRect(0, 0, bs.w, bs.h);
+    balls.forEach(function (b) { ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fillStyle = b.hit ? css('--green') : css('--accent'); ctx.globalAlpha = 0.85; ctx.fill(); ctx.globalAlpha = 1; });
+    requestAnimationFrame(loop);
+  })(last);
+  bc.addEventListener('pointerdown', function (e) {
+    for (var i = balls.length - 1; i >= 0; i--) {
+      var b = balls[i];
+      if (Math.hypot(e.offsetX - b.x, e.offsetY - b.y) <= b.r) { b.hit = !b.hit; info.textContent = '点中了第 ' + (i + 1) + ' 个球'; return; }
+    }
+    info.textContent = '没点中（(' + Math.round(e.offsetX) + ', ' + Math.round(e.offsetY) + ')）';
+  });
+  document.getElementById('balls-toggle').onclick = function () { running = !running; this.textContent = running ? '暂停' : '继续'; };
+
+  // ---- 25.6 OffscreenCanvas ----
+  var mc = document.getElementById('cv-main'), ms = setup(mc), angle = 0, ocInfo = document.getElementById('oc-info');
+  (function spin() {
+    var ctx = ms.ctx, cx = ms.w / 2, cy = ms.h / 2; angle += 0.05;
+    ctx.clearRect(0, 0, ms.w, ms.h); ctx.save(); ctx.translate(cx, cy);
+    for (var i = 0; i < 12; i++) { ctx.rotate(Math.PI / 6); ctx.globalAlpha = (i + 1) / 12; ctx.fillStyle = css('--blue'); ctx.fillRect(18, -4, 22, 8); }
+    ctx.restore(); ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle); ctx.fillStyle = css('--blue'); ctx.fillRect(-6, -40, 12, 30); ctx.restore();
+    requestAnimationFrame(spin);
+  })();
+  var wc = document.getElementById('cv-worker');
+  try {
+    if (!wc.transferControlToOffscreen) throw new Error('不支持 OffscreenCanvas');
+    var r = wc.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    wc.width = Math.round(r.width * dpr); wc.height = Math.round(r.height * dpr);
+    var off = wc.transferControlToOffscreen(), w = new Worker('demo/worker/offscreen.js');
+    w.onerror = function (e) { e.preventDefault(); ocInfo.textContent = 'Worker 加载失败（直接打开本地文件时浏览器会禁止，部署后即可）'; };
+    w.postMessage({ canvas: off, dpr: dpr, color: css('--green') }, [off]);
+  } catch (e) { ocInfo.textContent = e.message; }
+  document.getElementById('block-btn').onclick = function () {
+    ocInfo.textContent = '主线程阻塞中……';
+    setTimeout(function () {
+      var end = performance.now() + 2000; while (performance.now() < end) { /* 空转 2 秒 */ }
+      ocInfo.textContent = '刚才 2 秒里，左边停住了，右边（Worker）一直在转';
+    }, 30);
+  };
+})();
+</script>
+</body>
+</html>
